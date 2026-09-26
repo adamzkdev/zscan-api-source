@@ -173,9 +173,12 @@ pub async fn daily(
     Query(q): Query<DailyQuery>,
 ) -> ApiResult<Vec<DailyStats>> {
     let rows = sqlx::query_as::<_, DailyStats>(
-        "WITH b AS (
+        // The window ends at the latest indexed block, not the wall clock, like the other stats.
+        "WITH since AS (
+            SELECT date_trunc('day', max(time)) - make_interval(days => $1 - 1) AS t FROM blocks
+         ), b AS (
             SELECT date_trunc('day', time) AS day, count(*) AS blocks, avg(size)::float8 AS avg_block_size
-            FROM blocks GROUP BY 1
+            FROM blocks WHERE time >= (SELECT t FROM since) GROUP BY 1
          ), t AS (
             SELECT date_trunc('day', time) AS day,
                    count(*) FILTER (WHERE kind <> 'coinbase') AS txs,
@@ -186,14 +189,13 @@ pub async fn daily(
                    count(*) FILTER (WHERE kind = 'migration') AS migration,
                    count(*) FILTER (WHERE kind = 'mixed') AS mixed,
                    COALESCE(sum(fee), 0)::bigint AS fees
-            FROM transactions GROUP BY 1
+            FROM transactions WHERE time >= (SELECT t FROM since) GROUP BY 1
          )
          SELECT b.day, b.blocks, COALESCE(t.txs, 0) txs, COALESCE(t.transparent, 0) transparent,
                 COALESCE(t.shielding, 0) shielding, COALESCE(t.deshielding, 0) deshielding,
                 COALESCE(t.shielded, 0) shielded, COALESCE(t.migration, 0) migration,
                 COALESCE(t.mixed, 0) mixed, COALESCE(t.fees, 0) fees, b.avg_block_size
          FROM b LEFT JOIN t USING (day)
-         WHERE b.day > now() - make_interval(days => $1)
          ORDER BY b.day",
     )
     .bind(q.days.unwrap_or(30).clamp(1, 365))

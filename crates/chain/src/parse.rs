@@ -202,22 +202,33 @@ pub enum AddressKind {
 /// Classifies a mainnet address string. Transparent addresses are fully validated.
 pub fn address_kind(s: &str) -> Option<AddressKind> {
     let transparent_prefix = ["t1", "t3", "tm", "t2"].iter().any(|p| s.starts_with(p));
-    if transparent_prefix && s.parse::<transparent::Address>().is_ok() {
+    if (transparent_prefix && s.parse::<transparent::Address>().is_ok())
+        || tex_to_p2pkh(s).is_some()
+    {
         return Some(AddressKind::Transparent);
     }
-    let shielded_prefix = [
-        "zs1",
-        "u1",
-        "zc",
-        "tex1",
-        "ztestsapling",
-        "utest",
-        "textest",
-    ]
-    .iter()
-    .any(|p| s.starts_with(p));
+    let shielded_prefix = ["zs1", "u1", "zc", "ztestsapling", "utest"]
+        .iter()
+        .any(|p| s.starts_with(p));
     (shielded_prefix && s.len() > 40 && s.chars().all(|c| c.is_ascii_alphanumeric()))
         .then_some(AddressKind::Shielded)
+}
+
+/// A TEX address (ZIP-320) is a P2PKH address that only accepts transparent funds; on-chain it
+/// pays the ordinary P2PKH script. Returns that `t1…`/`tm…` address, which is how it is indexed.
+pub fn tex_to_p2pkh(s: &str) -> Option<String> {
+    if !(s.starts_with("tex1") || s.starts_with("textest1")) {
+        return None;
+    }
+    match s.parse::<transparent::Address>().ok()? {
+        transparent::Address::Tex {
+            network_kind,
+            validating_key_hash,
+        } => Some(
+            transparent::Address::from_pub_key_hash(network_kind, validating_key_hash).to_string(),
+        ),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +247,18 @@ mod address_tests {
             Some(AddressKind::Shielded)
         );
         assert_eq!(address_kind("hello"), None);
+    }
+
+    #[test]
+    fn tex_is_transparent() {
+        // ZIP-320 test vector.
+        let tex = "tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte";
+        assert_eq!(address_kind(tex), Some(AddressKind::Transparent));
+        assert_eq!(
+            tex_to_p2pkh(tex).as_deref(),
+            Some("t1VmmGiyjVNeCjxDZzg7vZmd99WyzVby9yC")
+        );
+        assert_eq!(tex_to_p2pkh("t1VmmGiyjVNeCjxDZzg7vZmd99WyzVby9yC"), None);
     }
 
     #[test]

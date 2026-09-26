@@ -5,7 +5,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
-use zscan_chain::parse::{address_kind, AddressKind};
+use zscan_chain::parse::{address_kind, tex_to_p2pkh, AddressKind};
 
 use super::Page;
 use crate::error::{ApiError, ApiResult};
@@ -49,6 +49,8 @@ pub async fn detail(
     Path(address): Path<String>,
     Query(page): Query<Page>,
 ) -> ApiResult<AddressDetail> {
+    // TEX addresses are indexed under the P2PKH address they pay to.
+    let address = tex_to_p2pkh(&address).unwrap_or(address);
     match address_kind(&address) {
         Some(AddressKind::Transparent) => {}
         Some(AddressKind::Shielded) => return Err(ApiError::BadRequest(
@@ -182,6 +184,7 @@ pub async fn csv(
     Path(address): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
+    let address = tex_to_p2pkh(&address).unwrap_or(address);
     if address_kind(&address) != Some(AddressKind::Transparent) {
         return Err(ApiError::BadRequest(
             "invalid_address",

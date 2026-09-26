@@ -28,6 +28,21 @@ pub struct ListQuery {
 /// Latest transactions, optionally filtered by kind.
 #[utoipa::path(get, path = "/v1/txs", params(ListQuery), responses((status = 200, body = [TxRow])), tag = "transactions")]
 pub async fn list(State(s): State<AppState>, Query(q): Query<ListQuery>) -> ApiResult<Vec<TxRow>> {
+    const KINDS: [&str; 7] = [
+        "coinbase",
+        "transparent",
+        "shielding",
+        "deshielding",
+        "shielded",
+        "migration",
+        "mixed",
+    ];
+    if let Some(k) = q.kind.as_deref().filter(|k| !KINDS.contains(k)) {
+        return Err(ApiError::BadRequest(
+            "invalid_kind",
+            format!("Unknown kind `{k}`; expected one of: {}", KINDS.join(", ")),
+        ));
+    }
     let order = match q.sort.as_deref() {
         Some("value") => "GREATEST(abs(orchard_vb), abs(ironwood_vb), abs(sapling_vb)) DESC",
         _ => "height DESC, block_index DESC",
@@ -67,6 +82,8 @@ pub struct OutputView {
     pub value: i64,
     pub address: Option<String>,
     pub script: String,
+    /// Hex-encoded OP_RETURN payload, for data-carrier outputs.
+    pub op_return: Option<String>,
     pub spent_by: Option<SpentBy>,
 }
 
@@ -245,6 +262,7 @@ pub async fn detail(State(s): State<AppState>, Path(txid): Path<String>) -> ApiR
                 value: o.value,
                 address: o.address.clone(),
                 script: o.script.clone(),
+                op_return: o.op_return.clone(),
                 spent_by: spent.remove(&(o.n as i32)),
             })
             .collect(),

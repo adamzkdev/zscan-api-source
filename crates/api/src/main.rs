@@ -9,6 +9,7 @@ mod ws;
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -20,7 +21,7 @@ use axum::{
     Json, Router,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 use zscan_chain::{Lwd, Resolver};
@@ -36,6 +37,10 @@ pub struct AppState {
     pub price: routes::price::SharedPriceCache,
     pub accounts: routes::rankings::AccountsCache,
     limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    /// Stricter per-IP limit for `POST /tx/broadcast`, which costs a node round-trip.
+    broadcast_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    /// Caps concurrent WebSocket clients.
+    pub ws_slots: Arc<Semaphore>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -74,6 +79,10 @@ async fn main() -> Result<()> {
         Quota::per_second(NonZeroU32::new(per_sec.max(1)).unwrap())
             .allow_burst(NonZeroU32::new(per_sec.max(1) * 3).unwrap()),
     ));
+    let broadcast_limiter = Arc::new(RateLimiter::keyed(
+        Quota::per_minute(NonZeroU32::new(6).unwrap()).allow_burst(NonZeroU32::new(3).unwrap()),
+    ));
+    let ws_slots = Arc::new(Semaphore::new(env_or("API_MAX_WS", "2000").parse()?));
     let (events, _) = broadcast::channel(1024);
 
     let state = AppState {
@@ -88,7 +97,22 @@ async fn main() -> Result<()> {
         price: Default::default(),
         accounts: routes::rankings::empty_accounts(),
         limiter,
+        broadcast_limiter,
+        ws_slots,
     };
+    // Forget idle clients so the per-IP tables don't grow without bound.
+    {
+        let (a, b) = (state.limiter.clone(), state.broadcast_limiter.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                for l in [&a, &b] {
+                    l.retain_recent();
+                    l.shrink_to_fit();
+                }
+            }
+        });
+    }
     tokio::spawn(ws::listen(state.clone()));
     tokio::spawn(routes::rankings::refresh_accounts(state.clone()));
 
@@ -120,6 +144,7 @@ async fn main() -> Result<()> {
         .route("/address/{address}/csv", get(routes::address::csv))
         .route("/accounts", get(routes::rankings::accounts))
         .route("/ws", get(ws::handler))
+        .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));
 
     let app = Router::new()
@@ -129,7 +154,12 @@ async fn main() -> Result<()> {
         .route("/health", get(|| async { "ok" }))
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        // Traces carry method, path and status only: no client addresses or headers.
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|req: &Request| {
+                tracing::debug_span!("http", method = %req.method(), path = %req.uri().path())
+            }),
+        )
         .with_state(state);
 
     let addr: SocketAddr = env_or("API_ADDR", "0.0.0.0:8080").parse()?;
@@ -165,7 +195,40 @@ fn is_internal(ip: IpAddr) -> bool {
     }
 }
 
-/// Per-IP rate limiting. Behind a reverse proxy the first `X-Forwarded-For` hop is used.
+/// Lets browsers and CDNs reuse successful GET responses briefly. Data changes at most once per
+/// block, so a few seconds of staleness is invisible, and it absorbs bursts on hot endpoints.
+async fn cache_control(req: Request, next: Next) -> Response {
+    let get = req.method() == axum::http::Method::GET;
+    let mut res = next.run(req).await;
+    if get
+        && res.status().is_success()
+        && !res
+            .headers()
+            .contains_key(axum::http::header::CACHE_CONTROL)
+    {
+        res.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("public, max-age=10"),
+        );
+    }
+    res
+}
+
+/// The client address to rate-limit. `X-Forwarded-For` is only trusted when the request comes
+/// from our own reverse proxy / web container (a private address); anyone else could forge it.
+/// The last hop is the one appended by the proxy closest to us.
+fn client_ip(peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
+    if !is_internal(peer) {
+        return Some(peer);
+    }
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit(',').next())
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// Per-IP rate limiting (see [`client_ip`]).
 async fn rate_limit(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -173,18 +236,15 @@ async fn rate_limit(
     req: Request,
     next: Next,
 ) -> Response {
-    let forwarded: Option<IpAddr> = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .and_then(|v| v.trim().parse().ok());
     // Server-side rendering from our own web container arrives from a private address with no
     // forwarded client: it serves many visitors, so it isn't limited as one.
-    if forwarded.is_none() && is_internal(peer.ip()) {
+    let Some(ip) = client_ip(peer.ip(), &headers) else {
         return next.run(req).await;
-    }
-    let ip = forwarded.unwrap_or(peer.ip());
-    if state.limiter.check_key(&ip).is_err() {
+    };
+    let limited = state.limiter.check_key(&ip).is_err()
+        || (req.uri().path().ends_with("/tx/broadcast")
+            && state.broadcast_limiter.check_key(&ip).is_err());
+    if limited {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({ "error": "rate_limited", "message": "Too many requests" })),
@@ -192,4 +252,29 @@ async fn rate_limit(
             .into_response();
     }
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xff(v: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", v.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn public_peers_cannot_spoof_forwarded_for() {
+        let peer: IpAddr = "203.0.113.7".parse().unwrap();
+        assert_eq!(client_ip(peer, &xff("1.2.3.4")), Some(peer));
+    }
+
+    #[test]
+    fn proxied_requests_use_last_hop() {
+        let proxy: IpAddr = "172.18.0.5".parse().unwrap();
+        let got = client_ip(proxy, &xff("1.2.3.4, 198.51.100.9"));
+        assert_eq!(got, Some("198.51.100.9".parse().unwrap()));
+        assert_eq!(client_ip(proxy, &HeaderMap::new()), None);
+    }
 }

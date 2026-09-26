@@ -103,8 +103,9 @@ async fn main() -> Result<()> {
     let retag = tokio::spawn(supervise("retag", move || retag(ctx).boxed()));
     let economics = tokio::spawn(supervise("economics", move || economics(ctx).boxed()));
     let audit = tokio::spawn(supervise("audit", move || audit(ctx).boxed()));
+    let daily = tokio::spawn(supervise("daily", move || daily(ctx).boxed()));
 
-    let _ = tokio::join!(follow, backfill, snapshots, mempool, retag, economics, audit);
+    let _ = tokio::join!(follow, backfill, snapshots, mempool, retag, economics, audit, daily);
     Ok(())
 }
 
@@ -288,6 +289,19 @@ async fn audit(ctx: &Ctx) -> Result<()> {
                 )
                 .await?;
         }
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+}
+
+/// Keeps the `daily_blocks` rollup current: the last two days often, everything periodically
+/// (backfill and the economics fill touch older days).
+async fn daily(ctx: &Ctx) -> Result<()> {
+    let mut tick = 0u32;
+    loop {
+        let since =
+            (!tick.is_multiple_of(20)).then(|| chrono::Utc::now() - chrono::Duration::days(2));
+        ctx.db.refresh_daily(since).await?;
+        tick = tick.wrapping_add(1);
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
 }

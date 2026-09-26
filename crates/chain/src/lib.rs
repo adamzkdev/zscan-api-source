@@ -41,7 +41,10 @@ pub fn is_testnet() -> bool {
 /// (container runtimes inject them, sometimes broken); set `ZSCAN_HTTP_PROXY` to use a proxy.
 pub fn http_client_builder() -> reqwest::ClientBuilder {
     let b = reqwest::Client::builder().no_proxy();
-    match std::env::var("ZSCAN_HTTP_PROXY").ok().filter(|p| !p.is_empty()) {
+    match std::env::var("ZSCAN_HTTP_PROXY")
+        .ok()
+        .filter(|p| !p.is_empty())
+    {
         Some(p) => match reqwest::Proxy::all(&p) {
             Ok(proxy) => b.proxy(proxy),
             Err(e) => {

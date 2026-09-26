@@ -7,7 +7,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::Response,
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde_json::{json, Value};
 use sqlx::postgres::PgListener;
@@ -45,7 +46,13 @@ async fn listen_once(state: &AppState) -> anyhow::Result<()> {
 /// WebSocket stream of `{"type": "block" | "mempool", "data": {...}}` events.
 #[utoipa::path(get, path = "/v1/ws", responses((status = 101, description = "WebSocket upgrade")), tag = "network")]
 pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| client(socket, state))
+    let Ok(slot) = state.ws_slots.clone().try_acquire_owned() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "too many live connections").into_response();
+    };
+    ws.on_upgrade(move |socket| async move {
+        client(socket, state).await;
+        drop(slot);
+    })
 }
 
 async fn client(mut socket: WebSocket, state: AppState) {

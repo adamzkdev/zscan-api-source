@@ -12,3 +12,6 @@ chrono.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 futures.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

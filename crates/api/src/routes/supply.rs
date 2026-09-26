@@ -94,14 +94,10 @@ pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
     });
 
     let daily = sqlx::query_as::<_, IssuanceDay>(
-        "SELECT date_trunc('day', time) AS day, count(*) AS blocks,
-                sum(subsidy)::bigint AS issued,
-                sum(subsidy - funding_paid - deferred)::bigint AS to_miners,
-                sum(funding_paid)::bigint AS to_funding,
-                sum(deferred)::bigint AS to_lockbox,
-                COALESCE(sum(fees), 0)::bigint AS fees,
-                COALESCE(sum(burned), 0)::bigint AS burned
-         FROM blocks WHERE subsidy IS NOT NULL GROUP BY 1 ORDER BY 1",
+        "SELECT day, econ_blocks::bigint AS blocks, issued,
+                issued - funding_paid - deferred AS to_miners,
+                funding_paid AS to_funding, deferred AS to_lockbox, fees, burned
+         FROM daily_blocks WHERE econ_blocks > 0 ORDER BY day",
     )
     .fetch_all(&s.db.pool)
     .await?;
@@ -236,9 +232,8 @@ pub async fn funding(State(s): State<AppState>) -> ApiResult<Funding> {
         .collect();
     recipients.sort();
     let daily = sqlx::query_as::<_, FundingDay>(
-        "SELECT date_trunc('day', time) AS day, sum(funding_paid)::bigint AS funding,
-                sum(deferred)::bigint AS deferred, count(*) AS blocks
-         FROM blocks WHERE subsidy IS NOT NULL GROUP BY 1 ORDER BY 1",
+        "SELECT day, funding_paid AS funding, deferred, econ_blocks::bigint AS blocks
+         FROM daily_blocks WHERE econ_blocks > 0 ORDER BY day",
     )
     .fetch_all(&s.db.pool)
     .await?;
@@ -298,9 +293,9 @@ pub async fn anonymity(State(s): State<AppState>) -> ApiResult<Anonymity> {
     .fetch_optional(&s.db.pool)
     .await?;
     let daily = sqlx::query_as::<_, AnonymityDay>(
-        "SELECT date_trunc('day', time) AS day, max(sapling_tree_size)::bigint AS sapling,
-                max(orchard_tree_size)::bigint AS orchard, max(ironwood_tree_size)::bigint AS ironwood
-         FROM blocks GROUP BY 1 ORDER BY 1",
+        "SELECT day, sapling_tree_size AS sapling, orchard_tree_size AS orchard,
+                ironwood_tree_size AS ironwood
+         FROM daily_blocks ORDER BY day",
     )
     .fetch_all(&s.db.pool)
     .await?;

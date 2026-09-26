@@ -10,7 +10,9 @@ use utoipa::{
 };
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
-use crate::routes::{address, blocks, fees, network, pools, price, rankings, search, status, supply, tx};
+use crate::routes::{
+    address, blocks, fees, network, pools, price, rankings, search, status, supply, tx,
+};
 
 /// Error body returned with every 4xx/5xx response.
 #[derive(Serialize, ToSchema)]
@@ -121,9 +123,24 @@ struct ApiDoc;
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut doc = ApiDoc::openapi();
     doc.info.description = Some(GUIDE.to_string());
-    doc.info.contact = Some(ContactBuilder::new().name(Some("ZScan")).url(Some("https://zscan.cash")).build());
-    doc.info.license = Some(LicenseBuilder::new().name("MIT").identifier(Some("MIT")).build());
-    let server = |url: &str, desc: &str| -> Server { ServerBuilder::new().url(url).description(Some(desc)).build() };
+    doc.info.contact = Some(
+        ContactBuilder::new()
+            .name(Some("ZScan"))
+            .url(Some("https://zscan.cash"))
+            .build(),
+    );
+    doc.info.license = Some(
+        LicenseBuilder::new()
+            .name("MIT")
+            .identifier(Some("MIT"))
+            .build(),
+    );
+    let server = |url: &str, desc: &str| -> Server {
+        ServerBuilder::new()
+            .url(url)
+            .description(Some(desc))
+            .build()
+    };
     doc.servers = Some(vec![
         server("https://zscan.cash", "Mainnet"),
         server("https://testnet.zscan.cash", "Testnet"),
@@ -161,7 +178,8 @@ pub async fn page() -> Html<&'static str> {
 <meta name="description" content="Free, open Zcash data API: blocks, transactions, supply audit, Ironwood migration, fees, miners."/></head>
 <body>
 <script id="api-reference" data-url="/openapi.json" data-configuration='{"theme":"default","layout":"modern","hideDownloadButton":false,"defaultHttpClient":{"targetKey":"shell","clientKey":"curl"},"metaData":{"title":"ZScan API Reference"},"customCss":":root{--scalar-color-accent:#0784c3}"}'></script>
-<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+<!-- Served by the web app (web/public/vendor) so readers never hit a third-party CDN. -->
+<script src="/vendor/scalar-api-reference-1.72.1.js"></script>
 </body></html>"##,
     )
 }

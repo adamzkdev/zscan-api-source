@@ -353,6 +353,34 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Recomputes the `daily_blocks` rollup for every day from `since` on (all days when `None`),
+    /// dropping days that no longer have blocks (after a reorg).
+    pub async fn refresh_daily(&self, since: Option<DateTime<Utc>>) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM daily_blocks WHERE $1::timestamptz IS NULL OR day >= date_trunc('day', $1)")
+            .bind(since)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO daily_blocks
+             SELECT date_trunc('day', time), count(*), count(subsidy),
+                    COALESCE(sum(subsidy), 0), COALESCE(sum(funding_paid) FILTER (WHERE subsidy IS NOT NULL), 0),
+                    COALESCE(sum(deferred) FILTER (WHERE subsidy IS NOT NULL), 0),
+                    COALESCE(sum(fees) FILTER (WHERE subsidy IS NOT NULL), 0),
+                    COALESCE(sum(burned) FILTER (WHERE subsidy IS NOT NULL), 0),
+                    max(sapling_tree_size), max(orchard_tree_size), max(ironwood_tree_size),
+                    sum(d_transparent), sum(d_sprout), sum(d_sapling), sum(d_orchard), sum(d_ironwood)
+             FROM blocks
+             WHERE $1::timestamptz IS NULL OR time >= date_trunc('day', $1)
+             GROUP BY 1",
+        )
+        .bind(since)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn notify(&self, channel: &str, payload: &str) -> Result<()> {
         sqlx::query("SELECT pg_notify($1, $2)")
             .bind(channel)
