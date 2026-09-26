@@ -372,10 +372,7 @@ async fn mempool(ctx: &Ctx) -> Result<()> {
                 kind: summary.kind.as_str().to_string(),
                 fee: summary.fee,
                 transparent_out: summary.transparent_out,
-                n_actions: (tx.orchard_actions.len()
-                    + tx.ironwood_actions.len()
-                    + tx.sapling_spends.len()
-                    + tx.sapling_outputs.len()) as i32,
+                n_actions: tx.logical_actions() as i32,
             };
             if !ctx.db.upsert_mempool(&row).await? {
                 continue;

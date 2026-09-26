@@ -69,6 +69,16 @@ impl ParsedTx {
             || !self.orchard_actions.is_empty()
             || !self.ironwood_actions.is_empty()
     }
+
+    /// ZIP-317 logical actions, which set the conventional fee. Transparent inputs and outputs
+    /// are counted one each (standard P2PKH sizes), as in the fee endpoint.
+    pub fn logical_actions(&self) -> usize {
+        self.inputs.len().max(self.outputs.len())
+            + 2 * self.n_joinsplits
+            + self.sapling_spends.len().max(self.sapling_outputs.len())
+            + self.orchard_actions.len()
+            + self.ironwood_actions.len()
+    }
 }
 
 pub fn parse_tx(raw: &[u8]) -> Result<ParsedTx> {

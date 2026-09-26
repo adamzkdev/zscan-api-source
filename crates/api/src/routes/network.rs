@@ -56,6 +56,7 @@ pub struct MempoolTx {
     pub kind: String,
     pub fee: Option<i64>,
     pub transparent_out: i64,
+    /// ZIP-317 logical actions (the conventional fee is 5000 zat × max(2, n_actions)).
     pub n_actions: i32,
 }
 
