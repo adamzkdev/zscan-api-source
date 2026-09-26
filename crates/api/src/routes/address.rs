@@ -3,11 +3,10 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use zscan_chain::parse::{address_kind, tex_to_p2pkh, AddressKind};
 
-use super::Page;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
@@ -40,17 +39,66 @@ pub struct AddressDetail {
     pub last_seen: Option<DateTime<Utc>>,
     /// First height covered by the index; older history is not listed.
     pub indexed_from: Option<i32>,
+    /// Transactions matching the history filters (all of `tx_count` when unfiltered).
+    pub filtered_count: i64,
     pub txs: Vec<AddressTx>,
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct HistoryQuery {
+    /// Max items (default 25, max 100).
+    pub limit: Option<i64>,
+    /// Zero-based page number.
+    pub page: Option<i64>,
+    /// Filter by method (transaction kind), e.g. `shielding`.
+    pub kind: Option<String>,
+    /// `in` (balance increased) or `out` (decreased).
+    pub direction: Option<String>,
+    /// `time` (default) or `amount` (absolute balance change).
+    pub sort: Option<String>,
+    /// `desc` (default) or `asc`.
+    pub order: Option<String>,
+}
+
 /// Transparent address balance and activity.
-#[utoipa::path(get, path = "/v1/address/{address}", params(("address" = String, Path), Page),
+#[utoipa::path(get, path = "/v1/address/{address}", params(("address" = String, Path), HistoryQuery),
     responses((status = 200, body = AddressDetail), (status = 400)), tag = "addresses")]
 pub async fn detail(
     State(s): State<AppState>,
     Path(address): Path<String>,
-    Query(page): Query<Page>,
+    Query(q): Query<HistoryQuery>,
 ) -> ApiResult<AddressDetail> {
+    let limit = q.limit.unwrap_or(25).clamp(1, 100);
+    let offset = q.page.unwrap_or(0).clamp(0, 10_000) * limit;
+    if let Some(k) = q.kind.as_deref().filter(|k| !super::tx::KINDS.contains(k)) {
+        return Err(ApiError::BadRequest(
+            "invalid_kind",
+            format!(
+                "Unknown kind `{k}`; expected one of: {}",
+                super::tx::KINDS.join(", ")
+            ),
+        ));
+    }
+    let direction = match q.direction.as_deref() {
+        None | Some("") | Some("all") => None,
+        Some(d @ ("in" | "out")) => Some(d),
+        Some(d) => {
+            return Err(ApiError::BadRequest(
+                "invalid_direction",
+                format!("Unknown direction `{d}`; expected `in` or `out`"),
+            ))
+        }
+    };
+    // Whitelisted fragments only: nothing user-supplied is interpolated.
+    let dir = if q.order.as_deref() == Some("asc") {
+        "ASC"
+    } else {
+        "DESC"
+    };
+    let order = match q.sort.as_deref() {
+        Some("amount") => format!("abs(delta) {dir}, height DESC, block_index DESC"),
+        _ => format!("height {dir}, block_index {dir}"),
+    };
     // TEX addresses are indexed under the P2PKH address they pay to.
     let address = tex_to_p2pkh(&address).unwrap_or(address);
     match address_kind(&address) {
@@ -87,20 +135,34 @@ pub async fn detail(
     .fetch_one(&s.db.pool)
     .await?;
 
-    let txs = sqlx::query_as::<_, AddressTx>(
-        "SELECT t.txid, t.height, t.time, t.kind, sum(x.delta)::bigint AS delta FROM (
-            SELECT txid, value AS delta FROM tx_outputs WHERE address = $1
-            UNION ALL
-            SELECT txid, -value FROM tx_inputs WHERE address = $1) x
-         JOIN transactions t USING (txid)
-         GROUP BY t.txid, t.height, t.time, t.kind, t.block_index
-         ORDER BY t.height DESC, t.block_index DESC LIMIT $2 OFFSET $3",
-    )
+    const HISTORY: &str = "WITH h AS (
+            SELECT t.txid, t.height, t.time, t.kind, t.block_index, sum(x.delta)::bigint AS delta FROM (
+                SELECT txid, value AS delta FROM tx_outputs WHERE address = $1
+                UNION ALL
+                SELECT txid, -value FROM tx_inputs WHERE address = $1) x
+            JOIN transactions t USING (txid)
+            GROUP BY t.txid, t.height, t.time, t.kind, t.block_index
+         ), f AS (
+            SELECT * FROM h
+            WHERE ($2::text IS NULL OR kind = $2)
+              AND ($3::text IS NULL OR ($3 = 'in' AND delta >= 0) OR ($3 = 'out' AND delta < 0))
+         )";
+    let txs = sqlx::query_as::<_, AddressTx>(&format!(
+        "{HISTORY} SELECT txid, height, time, kind, delta FROM f ORDER BY {order} LIMIT $4 OFFSET $5"
+    ))
     .bind(&address)
-    .bind(page.limit())
-    .bind(page.offset())
+    .bind(&q.kind)
+    .bind(direction)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&s.db.pool)
     .await?;
+    let filtered_count: i64 = sqlx::query_scalar(&format!("{HISTORY} SELECT count(*) FROM f"))
+        .bind(&address)
+        .bind(&q.kind)
+        .bind(direction)
+        .fetch_one(&s.db.pool)
+        .await?;
 
     let (blocks_mined, pool): (i64, Option<String>) = sqlx::query_as(
         "SELECT count(*), mode() WITHIN GROUP (ORDER BY miner_pool) FILTER (WHERE miner_pool IS NOT NULL)
@@ -137,6 +199,7 @@ pub async fn detail(
         first_seen,
         last_seen,
         indexed_from,
+        filtered_count,
         txs,
     }))
 }

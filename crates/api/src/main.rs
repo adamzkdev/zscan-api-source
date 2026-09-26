@@ -133,6 +133,7 @@ async fn main() -> Result<()> {
         .route("/network", get(routes::network::network))
         .route("/stats/daily", get(routes::network::daily))
         .route("/price", get(routes::price::price))
+        .route("/price/history", get(routes::price::history))
         .route("/miners", get(routes::rankings::miners))
         .route("/supply", get(routes::supply::supply))
         .route("/supply/audit", get(routes::supply::audit))

@@ -25,7 +25,7 @@ pub struct ErrorBody {
 
 const GUIDE: &str = r#"The free, open data API behind [ZScan](https://zscan.cash): blocks, transactions (including Ironwood v6),
 transparent addresses, value pools, the Orchard → Ironwood migration, supply & issuance with an independent audit,
-dev-fund flows, anonymity sets, fees, miners, mempool and live events.
+grants and lockbox flows, anonymity sets, fees, miners, mempool and live events.
 
 ## Quick start
 
@@ -106,7 +106,7 @@ protocol makes public."#;
         pools::current, pools::history, pools::migration,
         supply::supply, supply::audit, supply::funding, supply::anonymity,
         network::mempool, network::network, network::daily, fees::fees,
-        rankings::miners, rankings::accounts, price::price, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
+        rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
@@ -114,7 +114,7 @@ protocol makes public."#;
         (name = "blocks", description = "Blocks, with decoded transactions. Older blocks are decoded live."),
         (name = "transactions", description = "Decoded transactions (v1–v6, including Ironwood), lists by kind, broadcast."),
         (name = "addresses", description = "Transparent address balances and history, CSV export, Unified Address inspection. Shielded addresses are private by design."),
-        (name = "supply", description = "ZEC supply and issuance from consensus rules, the independent supply audit, dev-fund flows and anonymity sets."),
+        (name = "supply", description = "ZEC supply and issuance from consensus rules, the independent supply audit, grants and lockbox flows and anonymity sets."),
         (name = "pools", description = "Value pool balances over time and the Orchard → Ironwood migration (NU6.3)."),
         (name = "network", description = "Network stats, fees (ZIP-317), mempool, miners, price, service health and live events."),
         (name = "search", description = "Resolve any height, hash, txid or address."),
@@ -167,7 +167,7 @@ pub async fn index() -> Json<Value> {
             "/v1/address/{address}", "/v1/address/{address}/csv", "/v1/unified/{address}", "/v1/search?q=",
             "/v1/pools", "/v1/pools/history", "/v1/ironwood/migration", "/v1/supply", "/v1/supply/audit", "/v1/funding",
             "/v1/privacy/anonymity-sets", "/v1/network", "/v1/stats/daily", "/v1/fees", "/v1/mempool", "/v1/miners",
-            "/v1/accounts", "/v1/price", "/v1/upgrades", "/v1/labels", "/v1/protocols", "/v1/protocols/{slug}"
+            "/v1/accounts", "/v1/price", "/v1/price/history", "/v1/upgrades", "/v1/labels", "/v1/protocols", "/v1/protocols/{slug}"
         ],
         "amounts": "zatoshis (1 ZEC = 100,000,000 zat)",
         "rate_limit": "10 req/s per IP, burst 30"

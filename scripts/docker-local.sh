@@ -24,8 +24,8 @@ PROFILES=(--profile testnet)
 
 echo "==> docker compose up"
 docker compose -f docker-compose.yml -f docker-compose.local.yml build indexer web
-docker compose -f docker-compose.yml -f docker-compose.local.yml "${PROFILES[@]}" up -d
-docker compose -f docker-compose.yml -f docker-compose.local.yml "${PROFILES[@]}" ps
+docker compose -f docker-compose.yml -f docker-compose.local.yml ${PROFILES[@]+"${PROFILES[@]}"} up -d
+docker compose -f docker-compose.yml -f docker-compose.local.yml ${PROFILES[@]+"${PROFILES[@]}"} ps
 echo
 echo "Mainnet: http://localhost:${WEB_PORT:-3000}   API docs: http://localhost:${API_PORT:-8080}/docs"
 [[ ${#PROFILES[@]} -gt 0 ]] && echo "Testnet: http://localhost:${TESTNET_WEB_PORT:-3001}   API docs: http://localhost:${TESTNET_API_PORT:-8090}/docs"

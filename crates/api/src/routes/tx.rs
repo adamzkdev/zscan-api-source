@@ -25,18 +25,20 @@ pub struct ListQuery {
     pub sort: Option<String>,
 }
 
+/// Every transaction kind (`TxKind::as_str`).
+pub const KINDS: [&str; 7] = [
+    "coinbase",
+    "transparent",
+    "shielding",
+    "deshielding",
+    "shielded",
+    "migration",
+    "mixed",
+];
+
 /// Latest transactions, optionally filtered by kind.
 #[utoipa::path(get, path = "/v1/txs", params(ListQuery), responses((status = 200, body = [TxRow])), tag = "transactions")]
 pub async fn list(State(s): State<AppState>, Query(q): Query<ListQuery>) -> ApiResult<Vec<TxRow>> {
-    const KINDS: [&str; 7] = [
-        "coinbase",
-        "transparent",
-        "shielding",
-        "deshielding",
-        "shielded",
-        "migration",
-        "mixed",
-    ];
     if let Some(k) = q.kind.as_deref().filter(|k| !KINDS.contains(k)) {
         return Err(ApiError::BadRequest(
             "invalid_kind",
