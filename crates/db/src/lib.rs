@@ -38,9 +38,11 @@ pub struct IndexedBlock {
     pub miner_tag: Option<String>,
     pub miner_pool: Option<&'static str>,
     pub coinbase_value: i64,
-    pub subsidy: i64,
-    pub funding_paid: i64,
-    pub deferred: i64,
+    /// Protocol economics; `None` where the subsidy rules aren't implemented yet (post-NU7 until
+    /// `zebra-chain` supports it). The economics task fills them in later.
+    pub subsidy: Option<i64>,
+    pub funding_paid: Option<i64>,
+    pub deferred: Option<i64>,
     /// `None` when some input values are unknown (fees can't be computed).
     pub burned: Option<i64>,
     pub sapling_tree_size: Option<u32>,
@@ -276,9 +278,11 @@ impl Db {
     }
 
     /// Blocks indexed before economics columns existed, with their coinbase outputs and fees.
+    /// Blocks below `below` whose economics are still unknown.
     pub async fn blocks_missing_economics(
         &self,
         limit: i64,
+        below: i32,
     ) -> Result<Vec<(i32, Option<i64>, i64, Vec<String>, Vec<i64>)>> {
         Ok(sqlx::query_as(
             "SELECT b.height, b.fees, b.coinbase_value,
@@ -287,10 +291,11 @@ impl Db {
              FROM blocks b
              JOIN transactions t ON t.height = b.height AND t.block_index = 0
              LEFT JOIN tx_outputs o ON o.txid = t.txid
-             WHERE b.subsidy IS NULL
+             WHERE b.subsidy IS NULL AND b.height < $2
              GROUP BY b.height ORDER BY b.height DESC LIMIT $1",
         )
         .bind(limit)
+        .bind(below)
         .fetch_all(&self.pool)
         .await?)
     }

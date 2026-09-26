@@ -25,10 +25,15 @@ pub struct BlockEconomics {
     pub miner_subsidy: i64,
 }
 
-pub fn block_economics(height: u32, net: &Network) -> BlockEconomics {
+/// `None` where the subsidy rules aren't implemented yet (past an announced NU7 height that
+/// `zebra-chain` doesn't know; see [`crate::upgrades::economics_known`]).
+pub fn block_economics(height: u32, net: &Network) -> Option<BlockEconomics> {
+    if !crate::upgrades::economics_known(height) {
+        return None;
+    }
     let h = Height(height);
     let Ok(subsidy) = block_subsidy(h, net) else {
-        return BlockEconomics::default();
+        return Some(BlockEconomics::default());
     };
     let streams = funding_stream_values(h, net, subsidy).unwrap_or_default();
     let mut funding = 0i64;
@@ -41,12 +46,12 @@ pub fn block_economics(height: u32, net: &Network) -> BlockEconomics {
         }
     }
     let subsidy = i64::from(subsidy);
-    BlockEconomics {
+    Some(BlockEconomics {
         subsidy,
         funding_streams: funding,
         deferred,
         miner_subsidy: subsidy - funding - deferred,
-    }
+    })
 }
 
 /// Transparent addresses of every non-deferred funding-stream recipient active at `height`.
@@ -80,7 +85,7 @@ pub fn next_halving(height: u32, net: &Network) -> Option<u32> {
             hi = mid;
         }
     }
-    Some(hi)
+    Some(crate::upgrades::rescale_for_nu7(hi))
 }
 
 #[cfg(test)]
@@ -89,7 +94,7 @@ mod tests {
 
     #[test]
     fn mainnet_post_nu6_1_economics() {
-        let e = block_economics(3_497_141, &Network::Mainnet);
+        let e = block_economics(3_497_141, &Network::Mainnet).unwrap();
         // 1.5625 ZEC subsidy: 8% to ZCG, 12% deferred, 80% to the miner.
         assert_eq!(e.subsidy, 156_250_000);
         assert_eq!(e.funding_streams, 12_500_000);

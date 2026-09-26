@@ -11,7 +11,7 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, fees, network, pools, price, rankings, search, status, supply, tx,
+    address, blocks, fees, network, pools, price, rankings, search, status, supply, tx, upgrades,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -105,7 +105,8 @@ protocol makes public."#;
         pools::current, pools::history, pools::migration,
         supply::supply, supply::audit, supply::funding, supply::anonymity,
         network::mempool, network::network, network::daily, fees::fees,
-        rankings::miners, rankings::accounts, price::price, status::health, crate::ws::handler,
+        rankings::miners, rankings::accounts, price::price, status::health, upgrades::list,
+        crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
     tags(
@@ -163,7 +164,7 @@ pub async fn index() -> Json<Value> {
             "/v1/address/{address}", "/v1/address/{address}/csv", "/v1/unified/{address}", "/v1/search?q=",
             "/v1/pools", "/v1/pools/history", "/v1/ironwood/migration", "/v1/supply", "/v1/supply/audit", "/v1/funding",
             "/v1/privacy/anonymity-sets", "/v1/network", "/v1/stats/daily", "/v1/fees", "/v1/mempool", "/v1/miners",
-            "/v1/accounts", "/v1/price"
+            "/v1/accounts", "/v1/price", "/v1/upgrades"
         ],
         "amounts": "zatoshis (1 ZEC = 100,000,000 zat)",
         "rate_limit": "10 req/s per IP, burst 30"

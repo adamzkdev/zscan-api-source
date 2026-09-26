@@ -9,6 +9,7 @@ pub mod search;
 pub mod status;
 pub mod supply;
 pub mod tx;
+pub mod upgrades;
 
 use serde::Deserialize;
 use utoipa::IntoParams;

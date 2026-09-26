@@ -119,7 +119,10 @@ pub async fn build_block(
         })
         .unwrap_or(0);
     // Whatever the coinbase didn't claim of subsidy + fees is removed from supply (NU7 NSM).
-    let burned = fees.map(|f| f + econ.subsidy - econ.deferred - coinbase_value);
+    let burned = econ
+        .as_ref()
+        .zip(fees)
+        .map(|(e, f)| f + e.subsidy - e.deferred - coinbase_value);
 
     let size = BLOCK_HEADER_SIZE
         + compact_size_len(txs.len())
@@ -140,9 +143,9 @@ pub async fn build_block(
         miner_tag,
         miner,
         coinbase_value,
-        subsidy: econ.subsidy,
-        funding_paid,
-        deferred: econ.deferred,
+        subsidy: econ.as_ref().map(|e| e.subsidy),
+        funding_paid: econ.as_ref().map(|_| funding_paid),
+        deferred: econ.as_ref().map(|e| e.deferred),
         burned,
         sapling_tree_size: meta.map(|m| m.sapling_commitment_tree_size),
         orchard_tree_size: meta.map(|m| m.orchard_commitment_tree_size),

@@ -143,6 +143,7 @@ async fn main() -> Result<()> {
         .route("/unified/{address}", get(routes::address::unified))
         .route("/address/{address}/csv", get(routes::address::csv))
         .route("/accounts", get(routes::rankings::accounts))
+        .route("/upgrades", get(routes::upgrades::list))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

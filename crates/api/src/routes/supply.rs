@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use zscan_chain::economics::{block_economics, funding_stream_addresses, next_halving};
+use zscan_chain::upgrades;
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
@@ -55,6 +56,11 @@ pub struct Supply {
     pub next_halving_height: Option<u32>,
     pub next_halving_eta: Option<DateTime<Utc>>,
     pub avg_block_time: Option<f64>,
+    /// Target seconds per block at the tip (75, or 25 after NU7).
+    pub target_block_time: u32,
+    /// True when the tip is past an upgrade whose subsidy rules ZScan doesn't implement yet:
+    /// per-block figures read 0 and recent issuance is incomplete until it does.
+    pub economics_pending: bool,
     pub audit: AuditSummary,
     pub daily: Vec<IssuanceDay>,
 }
@@ -74,6 +80,8 @@ pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
     };
     let net = zscan_chain::network();
     let econ = block_economics(height as u32 + 1, net);
+    let economics_pending = econ.is_none();
+    let econ = econ.unwrap_or_default();
 
     let (issued_24h, burned_total): (Option<i64>, Option<i64>) = sqlx::query_as(
         "SELECT (SELECT sum(subsidy - COALESCE(burned, 0))::bigint FROM blocks
@@ -89,8 +97,9 @@ pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
     .fetch_one(&s.db.pool)
     .await?;
     let next = next_halving(height as u32, net);
-    let eta = next.zip(avg_block_time).map(|(h, t)| {
-        Utc::now() + chrono::Duration::seconds(((h - height as u32) as f64 * t) as i64)
+    // Projected at target spacing, which accounts for NU7's shorter blocks.
+    let eta = next.map(|h| {
+        Utc::now() + chrono::Duration::seconds(upgrades::expected_seconds(height as u32, h) as i64)
     });
 
     let daily = sqlx::query_as::<_, IssuanceDay>(
@@ -122,6 +131,8 @@ pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
         next_halving_height: next,
         next_halving_eta: eta,
         avg_block_time,
+        target_block_time: upgrades::target_spacing(height as u32 + 1),
+        economics_pending,
         audit: audit_summary(&s).await?,
         daily,
     }))
@@ -226,7 +237,7 @@ pub async fn funding(State(s): State<AppState>) -> ApiResult<Funding> {
             .await?
             .ok_or_else(|| ApiError::NotFound("No snapshot yet".into()))?;
     let net = zscan_chain::network();
-    let econ = block_economics(height as u32, net);
+    let econ = block_economics(height as u32, net).unwrap_or_default();
     let mut recipients: Vec<String> = funding_stream_addresses(height as u32, net)
         .into_iter()
         .collect();

@@ -245,14 +245,21 @@ async fn snapshots(ctx: &Ctx) -> Result<()> {
 /// Fills protocol economics for blocks indexed before those columns existed.
 async fn economics(ctx: &Ctx) -> Result<()> {
     loop {
-        let batch = ctx.db.blocks_missing_economics(500).await?;
+        // Past an NU7 height our consensus library doesn't implement, economics stay unknown.
+        let below = zscan_chain::upgrades::nu7_height()
+            .filter(|&a| !zscan_chain::upgrades::economics_known(a))
+            .map_or(i32::MAX, |a| a as i32);
+        let batch = ctx.db.blocks_missing_economics(500, below).await?;
         if batch.is_empty() {
             info!("block economics complete");
             return Ok(());
         }
         for (height, fees, coinbase_value, addrs, values) in batch {
             let h = height as u32;
-            let econ = zscan_chain::economics::block_economics(h, zscan_chain::network());
+            let Some(econ) = zscan_chain::economics::block_economics(h, zscan_chain::network())
+            else {
+                continue;
+            };
             let fs = zscan_chain::economics::funding_stream_addresses(h, zscan_chain::network());
             let paid = addrs
                 .iter()

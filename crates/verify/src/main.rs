@@ -64,7 +64,9 @@ async fn main() -> Result<()> {
                 coinbase = tx.transparent_out() - (tx.sapling_vb + tx.orchard_vb + tx.ironwood_vb);
             }
         }
-        let e = block_economics(h, zscan_chain::network());
+        let e = block_economics(h, zscan_chain::network()).with_context(|| {
+            format!("block {h}: subsidy rules past NU7 need a zebra-chain upgrade")
+        })?;
         deferred += e.deferred;
         issued += e.subsidy - (fees + e.subsidy - e.deferred - coinbase);
         println!("  decoded block {h}: {} txs", cb.vtx.len());

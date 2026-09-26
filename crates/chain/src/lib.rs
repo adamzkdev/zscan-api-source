@@ -11,6 +11,7 @@ pub mod parse;
 pub mod resolve;
 pub mod rpc;
 pub mod unified;
+pub mod upgrades;
 
 pub mod proto {
     tonic::include_proto!("cash.z.wallet.sdk.rpc");

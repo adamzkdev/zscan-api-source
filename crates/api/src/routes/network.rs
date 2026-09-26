@@ -94,6 +94,8 @@ pub struct Network {
     pub solps: Option<f64>,
     /// Average block interval over the last 100 blocks, seconds.
     pub avg_block_time: Option<f64>,
+    /// Consensus target block interval at the tip, seconds (75, or 25 after NU7).
+    pub target_block_time: u32,
     pub txs_24h: i64,
     pub fees_24h: i64,
     /// Share of 24h transactions with shielded components, 0–1.
@@ -134,6 +136,7 @@ pub async fn network(State(s): State<AppState>) -> ApiResult<Network> {
             .filter(|(_, t)| *t > 0.0)
             .map(|((_, d), t)| d * 8192.0 / t),
         avg_block_time,
+        target_block_time: zscan_chain::upgrades::target_spacing(height.unwrap_or(0) as u32 + 1),
         txs_24h: txs,
         fees_24h: fees.unwrap_or(0),
         shielded_tx_ratio_24h: if txs > 0 {
