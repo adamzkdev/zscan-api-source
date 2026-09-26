@@ -96,3 +96,40 @@ async fn audit_passes_and_catches_mismatch(pool: PgPool) {
     // Already-audited ranges are not re-checked.
     assert_eq!(db.run_audits().await.unwrap(), 0);
 }
+
+fn label(address: &str, active: bool) -> zscan_chain::labels::Label {
+    zscan_chain::labels::Label {
+        address: address.into(),
+        name: "Bridge: Vault".into(),
+        category: "bridge".into(),
+        protocol: Some("bridge".into()),
+        source: "test".into(),
+        origin: "api",
+        active,
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn labels_keep_retired_addresses(pool: PgPool) {
+    let db = Db { pool: pool.clone() };
+    db.sync_labels(&[label("t1a", true), label("t1b", true)])
+        .await
+        .unwrap();
+    // The protocol rotates: t1a retires (still listed), t1b disappears, t1c is new.
+    db.sync_labels(&[label("t1a", false), label("t1c", true)])
+        .await
+        .unwrap();
+    let rows: Vec<(String, bool)> =
+        sqlx::query_as("SELECT address, active FROM labels ORDER BY address")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("t1a".into(), false),
+            ("t1b".into(), false),
+            ("t1c".into(), true)
+        ]
+    );
+}

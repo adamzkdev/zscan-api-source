@@ -167,12 +167,17 @@ pub async fn refresh_accounts(state: AppState) {
 }
 
 async fn refresh_once(s: &AppState) -> anyhow::Result<()> {
+    // The busiest addresses, plus every labeled one (exchanges, bridges and treasuries can hold
+    // a lot while moving little).
     let candidates: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT address, count(DISTINCT txid) FROM (
+        "WITH x AS (
             SELECT address, txid, value FROM tx_outputs WHERE address IS NOT NULL
             UNION ALL
-            SELECT address, txid, value FROM tx_inputs WHERE address IS NOT NULL) x
-         GROUP BY address ORDER BY sum(value) DESC LIMIT 200",
+            SELECT address, txid, value FROM tx_inputs WHERE address IS NOT NULL
+         ), busy AS (
+            SELECT address FROM x GROUP BY address ORDER BY sum(value) DESC LIMIT 200
+         ), c AS (SELECT address FROM busy UNION SELECT address FROM labels)
+         SELECT c.address, count(DISTINCT x.txid) FROM c LEFT JOIN x USING (address) GROUP BY c.address",
     )
     .fetch_all(&s.db.pool)
     .await?;
@@ -190,6 +195,14 @@ async fn refresh_once(s: &AppState) -> anyhow::Result<()> {
         .fetch_one(&s.db.pool)
         .await?;
 
+    let tags = super::labels::lookup(
+        &s.db,
+        &candidates
+            .iter()
+            .map(|(a, _)| a.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
     let lwd = s.lwd.clone();
     let mut rows: Vec<(String, i64, i64)> = stream::iter(candidates)
         .map(|(addr, txs)| {
@@ -207,11 +220,13 @@ async fn refresh_once(s: &AppState) -> anyhow::Result<()> {
         .take(100)
         .enumerate()
         .map(|(i, (address, balance, tx_count))| {
-            let label = labels.iter().find(|(m, _)| *m == address).map(|(_, p)| {
-                format!(
-                    "Miner{}",
-                    p.as_ref().map(|p| format!(": {p}")).unwrap_or_default()
-                )
+            let label = tags.get(&address).map(|t| t.name.clone()).or_else(|| {
+                labels.iter().find(|(m, _)| *m == address).map(|(_, p)| {
+                    format!(
+                        "Miner{}",
+                        p.as_ref().map(|p| format!(": {p}")).unwrap_or_default()
+                    )
+                })
             });
             Account {
                 rank: i + 1,

@@ -129,6 +129,8 @@ pub struct TxDetail {
     pub sapling_outputs: Vec<String>,
     pub orchard_actions: Vec<ActionView>,
     pub ironwood_actions: Vec<ActionView>,
+    /// Name tags for the transparent addresses involved, keyed by address.
+    pub labels: std::collections::BTreeMap<String, super::labels::Tag>,
 }
 
 /// Transaction details, decoded from the raw transaction. Works for any mined or mempool tx.
@@ -220,7 +222,7 @@ pub async fn detail(State(s): State<AppState>, Path(txid): Path<String>) -> ApiR
     };
     let tip = super::tip(&s.db).await?;
 
-    Ok(Json(TxDetail {
+    let mut detail = TxDetail {
         status: if mined { "mined" } else { "mempool" }.into(),
         height: mined.then_some(raw.height as i64),
         block_hash,
@@ -286,7 +288,19 @@ pub async fn detail(State(s): State<AppState>, Path(txid): Path<String>) -> ApiR
             })
             .collect(),
         txid,
-    }))
+        labels: Default::default(),
+    };
+    let addresses: Vec<String> = detail
+        .inputs
+        .iter()
+        .filter_map(|i| i.address.clone())
+        .chain(detail.outputs.iter().filter_map(|o| o.address.clone()))
+        .collect();
+    detail.labels = super::labels::lookup(&s.db, &addresses)
+        .await?
+        .into_iter()
+        .collect();
+    Ok(Json(detail))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

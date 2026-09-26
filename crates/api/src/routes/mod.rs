@@ -1,9 +1,11 @@
 pub mod address;
 pub mod blocks;
 pub mod fees;
+pub mod labels;
 pub mod network;
 pub mod pools;
 pub mod price;
+pub mod protocols;
 pub mod rankings;
 pub mod search;
 pub mod status;

@@ -104,8 +104,10 @@ async fn main() -> Result<()> {
     let economics = tokio::spawn(supervise("economics", move || economics(ctx).boxed()));
     let audit = tokio::spawn(supervise("audit", move || audit(ctx).boxed()));
     let daily = tokio::spawn(supervise("daily", move || daily(ctx).boxed()));
+    let labels = tokio::spawn(supervise("labels", move || labels(ctx).boxed()));
 
-    let _ = tokio::join!(follow, backfill, snapshots, mempool, retag, economics, audit, daily);
+    let _ =
+        tokio::join!(follow, backfill, snapshots, mempool, retag, economics, audit, daily, labels);
     Ok(())
 }
 
@@ -313,8 +315,129 @@ async fn daily(ctx: &Ctx) -> Result<()> {
     }
 }
 
+/// Refreshes address labels from every source, their balances, and protocol API stats.
+async fn labels(ctx: &Ctx) -> Result<()> {
+    use zscan_chain::labels::{self, Label};
+    let http = zscan_chain::http_client_builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("zscan/0.1")
+        .build()?;
+    loop {
+        let mut all = labels::curated();
+
+        // Consensus: funding-stream recipients at the tip (Zcash Community Grants).
+        let (tip, _) = ctx.lwd.tip().await?;
+        for address in zscan_chain::economics::funding_stream_addresses(tip, zscan_chain::network())
+        {
+            all.push(Label {
+                address,
+                name: "Zcash Community Grants".into(),
+                category: "treasury".into(),
+                protocol: Some("zcg".into()),
+                source: "Funding-stream recipient in the consensus rules (ZIP 1016)".into(),
+                origin: "consensus",
+                active: true,
+            });
+        }
+
+        // Coinbase: payout addresses of blocks whose coinbase carries a known pool signature.
+        let miners: Vec<(String, String, i64)> = zscan_db::sqlx::query_as(
+            "SELECT miner, mode() WITHIN GROUP (ORDER BY miner_pool), count(*)
+             FROM blocks WHERE miner IS NOT NULL AND miner_pool IS NOT NULL GROUP BY miner",
+        )
+        .fetch_all(&ctx.db.pool)
+        .await?;
+        for (address, pool, blocks) in miners {
+            if all.iter().any(|l| l.address == address) {
+                continue;
+            }
+            all.push(Label {
+                address,
+                protocol: Some(labels::slug(&pool)),
+                name: pool,
+                category: "mining_pool".into(),
+                source: format!("Coinbase signature on {blocks} indexed blocks"),
+                origin: "coinbase",
+                active: true,
+            });
+        }
+
+        // Protocol APIs: Maya's ZEC vaults (mainnet only).
+        if !zscan_chain::is_testnet() {
+            match labels::maya_vaults(&http).await {
+                Ok(vaults) => {
+                    // Retiring vaults stay labeled: funds move from them to the new ones.
+                    for v in vaults {
+                        all.push(Label {
+                            active: v.active,
+                            address: v.address,
+                            name: "Maya Protocol: Vault".into(),
+                            category: "bridge".into(),
+                            protocol: Some("maya".into()),
+                            source: "Maya Asgard vault list (mayanode /mayachain/vaults/asgard)"
+                                .into(),
+                            origin: "api",
+                        });
+                    }
+                }
+                Err(e) => warn!("maya vaults: {e:#}"),
+            }
+            match labels::maya_stats(&http).await {
+                Ok(stats) => ctx.db.set_protocol_stats("maya", &stats).await?,
+                Err(e) => warn!("maya stats: {e:#}"),
+            }
+        }
+
+        ctx.db.sync_labels(&all).await?;
+
+        // Balances from the node, for every labeled address (retired ones too).
+        let addresses: Vec<String> = zscan_db::sqlx::query_scalar("SELECT address FROM labels")
+            .fetch_all(&ctx.db.pool)
+            .await?;
+        for address in addresses {
+            match ctx.lwd.taddr_balance(&address).await {
+                Ok(b) => ctx.db.set_label_balance(&address, b).await?,
+                Err(e) => warn!(%address, "label balance: {e:#}"),
+            }
+        }
+        info!(labels = all.len(), "labels refreshed");
+        tokio::time::sleep(Duration::from_secs(600)).await;
+    }
+}
+
 /// Fills mining-pool tags for blocks indexed before tagging existed.
 async fn retag(ctx: &Ctx) -> Result<()> {
+    // Blocks indexed while the miner was taken from the first coinbase output could name a
+    // funding-stream address (the dev fund) as their miner; point them at the real payout.
+    let sync = ctx.db.sync_state().await?;
+    let mut funding: Vec<String> = Vec::new();
+    for h in [sync.low, sync.high].into_iter().flatten() {
+        funding.extend(zscan_chain::economics::funding_stream_addresses(
+            h,
+            zscan_chain::network(),
+        ));
+    }
+    funding.sort();
+    funding.dedup();
+    let fixed = zscan_db::sqlx::query(
+        "UPDATE blocks b SET miner = (
+            SELECT o.address FROM transactions t JOIN tx_outputs o ON o.txid = t.txid
+            WHERE t.height = b.height AND t.block_index = 0 AND o.address IS NOT NULL
+              AND NOT (o.address = ANY($1))
+            ORDER BY o.n LIMIT 1)
+         WHERE b.miner = ANY($1)",
+    )
+    .bind(&funding)
+    .execute(&ctx.db.pool)
+    .await?
+    .rows_affected();
+    if fixed > 0 {
+        info!(
+            blocks = fixed,
+            "miner re-attributed away from funding-stream outputs"
+        );
+    }
+
     // Re-derive pool names from stored tags so detection fixes apply to past blocks.
     let tags: Vec<String> =
         zscan_db::sqlx::query_scalar("SELECT DISTINCT miner_tag FROM blocks WHERE miner_tag <> ''")

@@ -386,6 +386,75 @@ impl Db {
         Ok(())
     }
 
+    /// Inserts or refreshes labels. For each `(protocol, origin)` pair present in `labels`,
+    /// addresses of that pair that are no longer listed are kept but marked inactive (e.g. a
+    /// retired bridge vault), so their history stays attributed.
+    pub async fn sync_labels(&self, labels: &[zscan_chain::labels::Label]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for l in labels {
+            sqlx::query(
+                "INSERT INTO labels (address, name, category, protocol, source, origin, active, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+                 ON CONFLICT (address) DO UPDATE SET name = $2, category = $3, protocol = $4,
+                     source = $5, origin = $6, active = $7, updated_at = now()",
+            )
+            .bind(&l.address)
+            .bind(&l.name)
+            .bind(&l.category)
+            .bind(&l.protocol)
+            .bind(&l.source)
+            .bind(l.origin)
+            .bind(l.active)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let mut groups: Vec<(Option<&str>, &str)> = labels
+            .iter()
+            .map(|l| (l.protocol.as_deref(), l.origin))
+            .collect();
+        groups.sort();
+        groups.dedup();
+        for (protocol, origin) in groups {
+            let keep: Vec<&str> = labels
+                .iter()
+                .filter(|l| l.protocol.as_deref() == protocol && l.origin == origin)
+                .map(|l| l.address.as_str())
+                .collect();
+            sqlx::query(
+                "UPDATE labels SET active = FALSE
+                 WHERE protocol IS NOT DISTINCT FROM $1 AND origin = $2 AND NOT (address = ANY($3))",
+            )
+            .bind(protocol)
+            .bind(origin)
+            .bind(&keep)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn set_label_balance(&self, address: &str, balance: i64) -> Result<()> {
+        sqlx::query("UPDATE labels SET balance = $2 WHERE address = $1")
+            .bind(address)
+            .bind(balance)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_protocol_stats(&self, slug: &str, data: &serde_json::Value) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO protocol_stats (slug, data, updated_at) VALUES ($1, $2, now())
+             ON CONFLICT (slug) DO UPDATE SET data = $2, updated_at = now()",
+        )
+        .bind(slug)
+        .bind(data)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn notify(&self, channel: &str, payload: &str) -> Result<()> {
         sqlx::query("SELECT pg_notify($1, $2)")
             .bind(channel)

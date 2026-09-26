@@ -70,6 +70,7 @@ pub async fn build_block(
     let mut txs = Vec::with_capacity(parsed.len());
     let mut deltas = PoolDeltas::default();
     let mut fees = Some(0i64);
+    let fs_addrs = zscan_chain::economics::funding_stream_addresses(height, zscan_chain::network());
     let mut miner = None;
     let mut miner_tag = None;
     let mut coinbase_value = 0;
@@ -82,7 +83,12 @@ pub async fn build_block(
         let summary = summarize(&tx, &values);
         deltas += summary.deltas;
         if summary.kind == TxKind::Coinbase {
-            miner = tx.outputs.iter().find_map(|o| o.address.clone());
+            // The first payout that isn't a funding stream (dev fund outputs can come first).
+            miner = tx
+                .outputs
+                .iter()
+                .filter_map(|o| o.address.clone())
+                .find(|a| !fs_addrs.contains(a));
             // Empty string = "no tag" so the block isn't re-scanned later.
             miner_tag = Some(
                 tx.inputs
@@ -106,7 +112,6 @@ pub async fn build_block(
     }
 
     let econ = zscan_chain::economics::block_economics(height, zscan_chain::network());
-    let fs_addrs = zscan_chain::economics::funding_stream_addresses(height, zscan_chain::network());
     let funding_paid: i64 = txs
         .first()
         .filter(|t| t.tx.is_coinbase)

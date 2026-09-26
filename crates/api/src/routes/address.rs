@@ -24,8 +24,10 @@ pub struct AddressTx {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AddressDetail {
     pub address: String,
-    /// Name tag, e.g. "Miner: Luxor".
+    /// Name tag, e.g. "Maya Protocol: Vault" or "Miner: Luxor".
     pub label: Option<String>,
+    /// Details of the name tag, when the address is in the label set.
+    pub tag: Option<super::labels::Tag>,
     /// Blocks mined by this address within the indexed range.
     pub blocks_mined: i64,
     /// Current balance from the node (zatoshis), covering the full chain history.
@@ -107,11 +109,16 @@ pub async fn detail(
     .bind(&address)
     .fetch_one(&s.db.pool)
     .await?;
-    let label = (blocks_mined > 0).then(|| {
-        format!(
-            "Miner{}",
-            pool.map(|p| format!(": {p}")).unwrap_or_default()
-        )
+    let tag = super::labels::lookup(&s.db, std::slice::from_ref(&address))
+        .await?
+        .remove(&address);
+    let label = tag.as_ref().map(|t| t.name.clone()).or_else(|| {
+        (blocks_mined > 0).then(|| {
+            format!(
+                "Miner{}",
+                pool.map(|p| format!(": {p}")).unwrap_or_default()
+            )
+        })
     });
 
     let indexed_from: Option<i32> = sqlx::query_scalar("SELECT low FROM sync_state")
@@ -121,6 +128,7 @@ pub async fn detail(
     Ok(Json(AddressDetail {
         address,
         label,
+        tag,
         blocks_mined,
         balance,
         received: received.unwrap_or(0),

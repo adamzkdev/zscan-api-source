@@ -1,0 +1,54 @@
+{
+  "description": "Protocols and entities tracked on ZScan's Protocols page. Addresses come from labels/addresses.json (curated, each with a public source), consensus rules, coinbase signatures and the protocols' own public APIs. PRs welcome.",
+  "protocols": [
+    {
+      "slug": "ironwood",
+      "name": "Ironwood Pool",
+      "category": "shielded_pool",
+      "website": "https://zips.z.cash/zip-2005",
+      "description": "Shielded pool introduced by NU6.3, with quantum-recoverable notes. New shielded activity lands here."
+    },
+    {
+      "slug": "orchard",
+      "name": "Orchard Pool",
+      "category": "shielded_pool",
+      "website": "https://zips.z.cash/protocol/protocol.pdf",
+      "description": "Halo 2 shielded pool from NU5. Since NU6.3 funds can only leave, through a turnstile."
+    },
+    {
+      "slug": "sapling",
+      "name": "Sapling Pool",
+      "category": "shielded_pool",
+      "website": "https://zips.z.cash/protocol/protocol.pdf",
+      "description": "Shielded pool from the 2018 Sapling upgrade."
+    },
+    {
+      "slug": "sprout",
+      "name": "Sprout Pool",
+      "category": "shielded_pool",
+      "website": "https://zips.z.cash/protocol/protocol.pdf",
+      "description": "The original shielded pool, closed to new deposits since Canopy."
+    },
+    {
+      "slug": "lockbox",
+      "name": "Coinholder Fund (Lockbox)",
+      "category": "treasury",
+      "website": "https://zips.z.cash/zip-1016",
+      "description": "12% of block rewards, held by consensus in the lockbox and allocated by coinholder votes (ZIP 1016)."
+    },
+    {
+      "slug": "zcg",
+      "name": "Zcash Community Grants",
+      "category": "treasury",
+      "website": "https://zcashcommunitygrants.org",
+      "description": "8% of block rewards, paid by consensus to the ZCG funding-stream addresses (ZIP 1016)."
+    },
+    {
+      "slug": "maya",
+      "name": "Maya Protocol",
+      "category": "bridge",
+      "website": "https://www.mayaprotocol.com",
+      "description": "Cross-chain liquidity protocol with a native ZEC pool. Vault addresses are read from Maya's public API."
+    }
+  ]
+}
