@@ -275,23 +275,35 @@ fn summarize(
     }
 }
 
-/// Per-protocol extras: API stats (bridges) and mining share (pools).
+/// Per-protocol extras: API stats (bridges) and mining share (pools). Cached for a minute:
+/// the mining share scans a month of blocks.
 async fn stats(s: &AppState) -> anyhow::Result<HashMap<String, serde_json::Value>> {
+    type Stats = Option<(Instant, HashMap<String, serde_json::Value>)>;
+    static CACHE: OnceLock<Mutex<Stats>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| Mutex::new(None)).lock().await;
+    if let Some((at, m)) = cache.as_ref() {
+        if at.elapsed() < Duration::from_secs(60) {
+            return Ok(m.clone());
+        }
+    }
     let mut out: HashMap<String, serde_json::Value> =
         sqlx::query_as::<_, (String, serde_json::Value)>("SELECT slug, data FROM protocol_stats")
             .fetch_all(&s.db.pool)
             .await?
             .into_iter()
             .collect();
-    // Blocks without a known pool count toward the total but get no entry.
+    // Untagged blocks count for the pool known to use the same payout address. Blocks without
+    // a known pool count toward the total but get no entry.
     let mining: Vec<(Option<String>, i64, i64)> = sqlx::query_as(
-        // Untagged blocks count for the pool known to use the same payout address.
-        &format!(
-            "SELECT COALESCE(miner_pool, {}), count(*), sum(count(*)) OVER ()::bigint FROM blocks
-             WHERE time > (SELECT max(time) FROM blocks) - interval '30 days'
-             GROUP BY 1",
-            super::rankings::MINER_POOL_SQL
-        ),
+        "WITH recent AS (
+            SELECT miner, miner_pool FROM blocks
+            WHERE time > (SELECT max(time) FROM blocks) - interval '30 days'
+         ), payout AS (
+            SELECT miner, mode() WITHIN GROUP (ORDER BY miner_pool) AS pool FROM blocks
+            WHERE miner_pool IS NOT NULL AND miner IN (SELECT miner FROM recent) GROUP BY miner
+         )
+         SELECT COALESCE(r.miner_pool, p.pool), count(*), sum(count(*)) OVER ()::bigint
+         FROM recent r LEFT JOIN payout p USING (miner) GROUP BY 1",
     )
     .fetch_all(&s.db.pool)
     .await?;
@@ -304,6 +316,7 @@ async fn stats(s: &AppState) -> anyhow::Result<HashMap<String, serde_json::Value
             })
         });
     }
+    *cache = Some((Instant::now(), out.clone()));
     Ok(out)
 }
 
