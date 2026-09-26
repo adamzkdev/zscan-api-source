@@ -1,0 +1,6 @@
+/target
+node_modules
+.next
+.env
+*.log
+docker/bin/

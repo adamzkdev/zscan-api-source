@@ -1,0 +1,14 @@
+[package]
+name = "zscan-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zscan-chain.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+futures.workspace = true

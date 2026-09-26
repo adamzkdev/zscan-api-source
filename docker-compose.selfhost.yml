@@ -1,0 +1,28 @@
+# Use your own Zebra + Zaino node instead of public endpoints (no rate limits, full history).
+#
+# 1. Run the Zcash Foundation's Z3 stack with the indexer profile (Zebra + Zaino):
+#      git clone https://github.com/ZcashFoundation/z3 && cd z3
+#      docker compose --profile indexer up -d        # mainnet sync: ~300 GB SSD, 1-2 days
+#    Note: Z3 publishes Zebra's health port on host :8080; set API_PORT=8081 for ZScan.
+# 2. Start ZScan attached to Z3's network:
+#      docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
+#    Set START_HEIGHT=0 to index from genesis.
+
+services:
+  indexer:
+    environment:
+      LWD_URL: http://zaino:8137
+      LWD_RATE_PER_SEC: 0
+      RPC_URL: ${SELFHOST_RPC_URL:-http://zaino:8237}
+      RPC_RATE_PER_MIN: 0
+    networks: [default, z3]
+  api:
+    environment:
+      LWD_URL: http://zaino:8137
+      LWD_RATE_PER_SEC: 0
+    networks: [default, z3]
+
+networks:
+  z3:
+    external: true
+    name: z3-mainnet

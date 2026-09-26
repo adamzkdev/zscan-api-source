@@ -1,0 +1,34 @@
+# Local override: images from host-built artifacts (no network needed inside Docker builds).
+# Use via scripts/docker-local.sh. Each image is built once (indexer, web) and reused.
+
+services:
+  indexer:
+    build:
+      context: .
+      dockerfile: docker/rust.prebuilt.Dockerfile
+    image: zscan-rust:local
+  api:
+    build: !reset null
+    image: zscan-rust:local
+  indexer-testnet:
+    build: !reset null
+    image: zscan-rust:local
+  api-testnet:
+    build: !reset null
+    image: zscan-rust:local
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.prebuilt
+    image: zscan-web:local
+    environment:
+      PUBLIC_WS_URL: ws://localhost:${API_PORT:-8080}/v1/ws
+      MAINNET_URL: http://localhost:${WEB_PORT:-3000}
+      TESTNET_URL: http://localhost:${TESTNET_WEB_PORT:-3001}
+  web-testnet:
+    build: !reset null
+    image: zscan-web:local
+    environment:
+      PUBLIC_WS_URL: ws://localhost:${TESTNET_API_PORT:-8090}/v1/ws
+      MAINNET_URL: http://localhost:${WEB_PORT:-3000}
+      TESTNET_URL: http://localhost:${TESTNET_WEB_PORT:-3001}

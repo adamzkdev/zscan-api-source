@@ -1,0 +1,47 @@
+{
+  "description": "Open ZScan address labels. Each entry cites a verifiable public source. PRs welcome.",
+  "labels": [
+    {
+      "address": "t1SqwRAAdSig6dE4EBPLonAait219VmkUjP",
+      "name": "Foundry",
+      "category": "mining_pool",
+      "source": "coinbase signature: jFoundry Zcash Pool #PrivacyMatters",
+      "blocks_seen": 3704
+    },
+    {
+      "address": "t1XQZdZMnzXBcL8yx2PR27dSNrqctgwLgux",
+      "name": "Luxor",
+      "category": "mining_pool",
+      "source": "coinbase signature: /Mined by Luxor/",
+      "blocks_seen": 2683
+    },
+    {
+      "address": "t1VTjv7XF3hYqxQkxKmHHErvus3bDrbbkGg",
+      "name": "2Miners",
+      "category": "mining_pool",
+      "source": "coinbase signature: 2Miners https://2miners.com",
+      "blocks_seen": 1488
+    },
+    {
+      "address": "t1Y2tYgDJnH4m1uQPDXxvXQSh1Jbun3AP22",
+      "name": "KuPool",
+      "category": "mining_pool",
+      "source": "coinbase signature: : mined by KuPool",
+      "blocks_seen": 257
+    },
+    {
+      "address": "t1QxTHUputbmZRxd3EqP671sLqd6KNBQbXJ",
+      "name": "2Miners",
+      "category": "mining_pool",
+      "source": "coinbase signature: 2Miners https://2miners.com",
+      "blocks_seen": 57
+    },
+    {
+      "address": "t1Yw8NGbPDs7fgpxzJ8gzCgurAQ8GFQBkk2",
+      "name": "Mysolopool",
+      "category": "mining_pool",
+      "source": "coinbase signature: : Mysolopool.com",
+      "blocks_seen": 1
+    }
+  ]
+}

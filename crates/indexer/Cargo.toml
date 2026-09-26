@@ -1,0 +1,19 @@
+[package]
+name = "zscan-indexer"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "zscan-indexer"
+path = "src/main.rs"
+
+[dependencies]
+zscan-chain.workspace = true
+zscan-db.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

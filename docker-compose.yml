@@ -1,0 +1,154 @@
+# ZScan: Zcash explorer + data API.
+#
+#   docker compose up -d --build              # local: web on :3000, API on :8080
+#   docker compose --profile prod up -d       # + Caddy with automatic HTTPS for $SITE_DOMAIN
+#
+# Data sources default to public endpoints (zec.rocks lightwalletd + a public zebrad RPC).
+# To use your own Zebra + Zaino node, see docker-compose.selfhost.yml.
+
+name: zscan
+
+x-rust: &rust
+  build:
+    context: .
+    dockerfile: docker/rust.Dockerfile
+  image: zscan-rust:latest
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: zscan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zscan}
+      POSTGRES_DB: zscan
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zscan"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  indexer:
+    <<: *rust
+    command: ["zscan-indexer"]
+    environment:
+      DATABASE_URL: postgres://zscan:${POSTGRES_PASSWORD:-zscan}@db:5432/zscan
+      LWD_URL: ${LWD_URL:-https://zec.rocks:443,https://na.zec.rocks:443,https://eu.zec.rocks:443}
+      LWD_RATE_PER_SEC: ${LWD_RATE_PER_SEC:-50}
+      RPC_URL: ${RPC_URL:-https://zcash-mainnet-zebrad.gateway.tatum.io}
+      RPC_RATE_PER_MIN: ${RPC_RATE_PER_MIN:-4}
+      START_HEIGHT: ${START_HEIGHT:-3428143}
+      RUST_LOG: ${RUST_LOG:-info}
+
+  api:
+    <<: *rust
+    command: ["zscan-api"]
+    environment:
+      DATABASE_URL: postgres://zscan:${POSTGRES_PASSWORD:-zscan}@db:5432/zscan
+      LWD_URL: ${LWD_URL:-https://zec.rocks:443,https://na.zec.rocks:443,https://eu.zec.rocks:443}
+      LWD_RATE_PER_SEC: ${API_LWD_RATE_PER_SEC:-20}
+      API_RATE_PER_SEC: ${API_RATE_PER_SEC:-10}
+      API_ADDR: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "zscan-api", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build:
+      context: ./web
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:8080
+      SITE_URL: ${SITE_URL:-https://zscan.cash}
+      ZSCAN_NETWORK: mainnet
+      PUBLIC_WS_URL: ${PUBLIC_WS_URL:-}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Testnet instance (docker compose --profile testnet up -d): its own database,
+  # indexer, API and web on :3001, for NU7 readiness testing.
+  indexer-testnet:
+    <<: *rust
+    profiles: [testnet]
+    command: ["zscan-indexer"]
+    environment:
+      ZSCAN_NETWORK: testnet
+      DATABASE_URL: postgres://zscan:${POSTGRES_PASSWORD:-zscan}@db:5432/zscan_testnet
+      LWD_URL: ${TESTNET_LWD_URL:-https://testnet.zec.rocks:443}
+      LWD_RATE_PER_SEC: ${LWD_RATE_PER_SEC:-20}
+      RPC_URL: ${TESTNET_RPC_URL:-https://zcash-testnet-zebrad.gateway.tatum.io}
+      RPC_RATE_PER_MIN: ${RPC_RATE_PER_MIN:-4}
+      # Testnet has ~270k blocks since NU6.3; index the recent window by default.
+      START_HEIGHT: ${TESTNET_START_HEIGHT:-tip-20000}
+      RUST_LOG: ${RUST_LOG:-info}
+
+  api-testnet:
+    <<: *rust
+    profiles: [testnet]
+    command: ["zscan-api"]
+    environment:
+      ZSCAN_NETWORK: testnet
+      DATABASE_URL: postgres://zscan:${POSTGRES_PASSWORD:-zscan}@db:5432/zscan_testnet
+      LWD_URL: ${TESTNET_LWD_URL:-https://testnet.zec.rocks:443}
+      API_ADDR: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:${TESTNET_API_PORT:-8090}:8080"
+
+  web-testnet:
+    profiles: [testnet]
+    build:
+      context: ./web
+    environment:
+      API_INTERNAL_URL: http://api-testnet:8080
+      SITE_URL: ${TESTNET_SITE_URL:-https://testnet.zscan.cash}
+      ZSCAN_NETWORK: testnet
+      PUBLIC_WS_URL: ${TESTNET_PUBLIC_WS_URL:-}
+    ports:
+      - "127.0.0.1:${TESTNET_WEB_PORT:-3001}:3000"
+    depends_on: [api-testnet]
+
+  # Tor onion service in front of Caddy (prod). The .onion hostname lands in the tor_data volume.
+  tor:
+    profiles: [prod]
+    image: dperson/torproxy:latest
+    restart: unless-stopped
+    command: ["-s", "80;caddy:80"]
+    volumes:
+      - tor_data:/var/lib/tor
+    depends_on: [caddy]
+
+  caddy:
+    profiles: [prod]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-zscan.cash}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [web, api]
+
+volumes:
+  pgdata:
+  caddy_data:
+  tor_data:

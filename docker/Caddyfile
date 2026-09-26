@@ -1,0 +1,9 @@
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# API, OpenAPI spec, docs and the live WebSocket go straight to the API.
+	@api path /v1/* /openapi.json /docs /health
+	reverse_proxy @api api:8080
+
+	reverse_proxy web:3000
+}

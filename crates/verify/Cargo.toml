@@ -1,0 +1,14 @@
+[package]
+name = "zscan-verify"
+version.workspace = true
+edition.workspace = true
+description = "Independently reproduce ZScan's Zcash supply audit from a lightwalletd + zebrad RPC"
+
+[[bin]]
+name = "zscan-verify"
+path = "src/main.rs"
+
+[dependencies]
+zscan-chain.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
