@@ -110,7 +110,7 @@ protocol makes public."#;
         compact::range, compact::tx_outputs, bridges::overview,
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
         inscriptions::image, inscriptions::by_address,
-        nft::collections, nft::collection, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
+        nft::collections, nft::collection, nft::collection_stats, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
         nft::sales,
         crate::ws::handler,
     ),
@@ -174,10 +174,10 @@ pub async fn index() -> Json<Value> {
             "/v1/address/{address}", "/v1/address/{address}/csv", "/v1/unified/{address}", "/v1/search?q=",
             "/v1/pools", "/v1/pools/history", "/v1/ironwood/migration", "/v1/supply", "/v1/supply/audit", "/v1/funding",
             "/v1/privacy/anonymity-sets", "/v1/network", "/v1/stats/daily", "/v1/fees", "/v1/mempool", "/v1/miners",
-            "/v1/accounts", "/v1/price", "/v1/price/history", "/v1/upgrades", "/v1/labels", "/v1/protocols", "/v1/protocols/{slug}", "/v1/bridges"
+            "/v1/accounts", "/v1/price", "/v1/price/history", "/v1/upgrades", "/v1/labels", "/v1/protocols", "/v1/protocols/{slug}", "/v1/bridges", "/v1/collections", "/v1/collections/{slug}", "/v1/collections/{slug}/stats"
         ],
         "amounts": "zatoshis (1 ZEC = 100,000,000 zat)",
-        "rate_limit": "10 req/s per IP, burst 30"
+        "rate_limit": "10 req/s per IP, burst 30; images and inscribed files 60 req/s, burst 300"
     }))
 }
 

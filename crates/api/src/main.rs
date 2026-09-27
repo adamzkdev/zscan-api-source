@@ -41,6 +41,8 @@ pub struct AppState {
     limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     /// Stricter per-IP limit for `POST /tx/broadcast`, which costs a node round-trip.
     broadcast_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    /// Separate, larger budget for pictures: a gallery page loads dozens at once.
+    media_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     /// Caps concurrent WebSocket clients.
     pub ws_slots: Arc<Semaphore>,
 }
@@ -84,6 +86,11 @@ async fn main() -> Result<()> {
     let broadcast_limiter = Arc::new(RateLimiter::keyed(
         Quota::per_minute(NonZeroU32::new(6).unwrap()).allow_burst(NonZeroU32::new(3).unwrap()),
     ));
+    let media_per_sec: u32 = env_or("API_MEDIA_RATE_PER_SEC", "60").parse()?;
+    let media_limiter = Arc::new(RateLimiter::keyed(
+        Quota::per_second(NonZeroU32::new(media_per_sec.max(1)).unwrap())
+            .allow_burst(NonZeroU32::new(media_per_sec.max(1) * 5).unwrap()),
+    ));
     let ws_slots = Arc::new(Semaphore::new(env_or("API_MAX_WS", "2000").parse()?));
     let (events, _) = broadcast::channel(1024);
 
@@ -100,15 +107,20 @@ async fn main() -> Result<()> {
         accounts: routes::rankings::empty_accounts(),
         limiter,
         broadcast_limiter,
+        media_limiter,
         ws_slots,
     };
     // Forget idle clients so the per-IP tables don't grow without bound.
     {
-        let (a, b) = (state.limiter.clone(), state.broadcast_limiter.clone());
+        let (a, b, c) = (
+            state.limiter.clone(),
+            state.broadcast_limiter.clone(),
+            state.media_limiter.clone(),
+        );
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;
-                for l in [&a, &b] {
+                for l in [&a, &b, &c] {
                     l.retain_recent();
                     l.shrink_to_fit();
                 }
@@ -118,6 +130,9 @@ async fn main() -> Result<()> {
     tokio::spawn(ws::listen(state.clone()));
     tokio::spawn(routes::rankings::refresh_accounts(state.clone()));
     tokio::spawn(refresh_nft_registry(state.http.clone()));
+    if env_or("NFT_ARCHIVE", "1") != "0" {
+        tokio::spawn(nft_markets::archive(state.db.pool.clone()));
+    }
 
     let v1 = Router::new()
         .route("/", get(docs::index))
@@ -169,6 +184,10 @@ async fn main() -> Result<()> {
         .route("/collections", get(routes::nft::collections))
         .route("/collections/{slug}", get(routes::nft::collection))
         .route("/collections/{slug}/logo", get(routes::nft::logo))
+        .route(
+            "/collections/{slug}/stats",
+            get(routes::nft::collection_stats),
+        )
         .route(
             "/collections/{slug}/items/{id}",
             get(routes::nft::venue_item),
@@ -296,6 +315,12 @@ fn client_ip(peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
         .and_then(|v| v.trim().parse().ok())
 }
 
+/// Pictures and inscribed files: immutable, cached by browsers, and requested dozens at a time
+/// by gallery pages.
+fn is_media(path: &str) -> bool {
+    path.ends_with("/image") || path.ends_with("/content") || path.ends_with("/logo")
+}
+
 /// Per-IP rate limiting (see [`client_ip`]).
 async fn rate_limit(
     State(state): State<AppState>,
@@ -309,9 +334,14 @@ async fn rate_limit(
     let Some(ip) = client_ip(peer.ip(), &headers) else {
         return next.run(req).await;
     };
-    let limited = state.limiter.check_key(&ip).is_err()
-        || (req.uri().path().ends_with("/tx/broadcast")
-            && state.broadcast_limiter.check_key(&ip).is_err());
+    let path = req.uri().path();
+    let limiter = if is_media(path) {
+        &state.media_limiter
+    } else {
+        &state.limiter
+    };
+    let limited = limiter.check_key(&ip).is_err()
+        || (path.ends_with("/tx/broadcast") && state.broadcast_limiter.check_key(&ip).is_err());
     if limited {
         return (
             StatusCode::TOO_MANY_REQUESTS,
