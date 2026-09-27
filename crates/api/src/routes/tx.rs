@@ -21,8 +21,14 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     /// Only transactions below this height (for pagination).
     pub before: Option<i32>,
-    /// Sort by `recent` (default) or `value` (largest shielded value moved first).
+    /// Sort by `recent` (default), `value` (largest shielded value moved first) or `moved`
+    /// (largest visible value first, transparent outputs included; pair it with `since`).
     pub sort: Option<String>,
+    /// Only transactions that moved at least this many zatoshis in the clear: the largest of
+    /// the transparent output total and each shielded pool's value balance.
+    pub min_value: Option<i64>,
+    /// Only transactions mined at or after this Unix timestamp (seconds).
+    pub since: Option<i64>,
 }
 
 /// Every transaction kind (`TxKind::as_str`).
@@ -47,16 +53,32 @@ pub async fn list(State(s): State<AppState>, Query(q): Query<ListQuery>) -> ApiR
     }
     let order = match q.sort.as_deref() {
         Some("value") => "GREATEST(abs(orchard_vb), abs(ironwood_vb), abs(sapling_vb)) DESC",
+        Some("moved") => {
+            "GREATEST(transparent_out, abs(sapling_vb), abs(orchard_vb), abs(ironwood_vb)) DESC, height DESC"
+        }
         _ => "height DESC, block_index DESC",
+    };
+    let since = match q.since {
+        Some(ts) => Some(Utc.timestamp_opt(ts, 0).single().ok_or_else(|| {
+            ApiError::BadRequest(
+                "invalid_since",
+                format!("`since` must be a Unix timestamp in seconds, got {ts}"),
+            )
+        })?),
+        None => None,
     };
     let rows = sqlx::query_as::<_, TxRow>(&format!(
         "SELECT {TX_ROW_COLUMNS} FROM transactions
          WHERE ($1::text IS NULL OR kind = $1) AND ($2::int IS NULL OR height < $2)
+           AND ($4::timestamptz IS NULL OR time >= $4)
+           AND ($5::bigint IS NULL OR GREATEST(transparent_out, abs(sapling_vb), abs(orchard_vb), abs(ironwood_vb)) >= $5)
          ORDER BY {order} LIMIT $3"
     ))
     .bind(&q.kind)
     .bind(q.before)
     .bind(q.limit.unwrap_or(25).clamp(1, 100))
+    .bind(since)
+    .bind(q.min_value)
     .fetch_all(&s.db.pool)
     .await?;
     Ok(Json(rows))
