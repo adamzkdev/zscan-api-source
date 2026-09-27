@@ -27,6 +27,9 @@ pub struct ListQuery {
     /// Only transactions that moved at least this many zatoshis in the clear: the largest of
     /// the transparent output total and each shielded pool's value balance.
     pub min_value: Option<i64>,
+    /// Only transactions that moved at most this many zatoshis in the clear (same measure as
+    /// `min_value`); together they find transactions of a given amount.
+    pub max_value: Option<i64>,
     /// Only transactions mined at or after this Unix timestamp (seconds).
     pub since: Option<i64>,
 }
@@ -72,6 +75,7 @@ pub async fn list(State(s): State<AppState>, Query(q): Query<ListQuery>) -> ApiR
          WHERE ($1::text IS NULL OR kind = $1) AND ($2::int IS NULL OR height < $2)
            AND ($4::timestamptz IS NULL OR time >= $4)
            AND ($5::bigint IS NULL OR GREATEST(transparent_out, abs(sapling_vb), abs(orchard_vb), abs(ironwood_vb)) >= $5)
+           AND ($6::bigint IS NULL OR GREATEST(transparent_out, abs(sapling_vb), abs(orchard_vb), abs(ironwood_vb)) <= $6)
          ORDER BY {order} LIMIT $3"
     ))
     .bind(&q.kind)
@@ -79,6 +83,7 @@ pub async fn list(State(s): State<AppState>, Query(q): Query<ListQuery>) -> ApiR
     .bind(q.limit.unwrap_or(25).clamp(1, 100))
     .bind(since)
     .bind(q.min_value)
+    .bind(q.max_value)
     .fetch_all(&s.db.pool)
     .await?;
     Ok(Json(rows))
