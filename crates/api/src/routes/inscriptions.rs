@@ -526,7 +526,7 @@ pub async fn image(
     match ipfs::image(&path, declared.as_deref()).await {
         Ok((ctype, body)) => Ok(sandboxed(safe_content_type(&ctype), body)),
         Err(e) => {
-            tracing::debug!("ipfs image {path}: {e:#}");
+            tracing::warn!("ipfs image {path}: {e:#}");
             Ok((StatusCode::BAD_GATEWAY, "IPFS image unavailable").into_response())
         }
     }

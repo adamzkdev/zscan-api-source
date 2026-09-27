@@ -99,7 +99,7 @@ pub async fn metadata(meta: &str, item: &str) -> Option<serde_json::Value> {
             .ok()
             .filter(|v| v.is_object()),
         Err(e) => {
-            tracing::debug!("ipfs metadata {key}: {e:#}");
+            tracing::warn!("ipfs metadata {key}: {e:#}");
             // Transient failures aren't cached.
             return None;
         }
