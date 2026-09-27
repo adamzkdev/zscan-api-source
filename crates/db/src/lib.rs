@@ -1,6 +1,7 @@
 //! Postgres storage and block building shared by the indexer and the API.
 
 pub mod build;
+pub mod inscriptions;
 
 use std::collections::HashMap;
 

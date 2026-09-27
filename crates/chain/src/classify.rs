@@ -148,6 +148,7 @@ mod tests {
             prev_txid: Some("00".into()),
             prev_n: Some(0),
             coinbase_data: None,
+            script_sig: Vec::new(),
         }
     }
 

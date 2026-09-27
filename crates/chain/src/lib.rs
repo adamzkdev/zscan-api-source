@@ -5,6 +5,7 @@ pub mod classify;
 pub mod consts;
 pub mod economics;
 pub mod hash;
+pub mod inscriptions;
 pub mod labels;
 pub mod limiter;
 pub mod lwd;

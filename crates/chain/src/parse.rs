@@ -16,6 +16,9 @@ pub struct TxInput {
     pub prev_n: Option<u32>,
     /// Hex of the coinbase data, for coinbase inputs.
     pub coinbase_data: Option<String>,
+    /// Unlocking script, which carries inscription envelopes. Not part of API responses.
+    #[serde(skip)]
+    pub script_sig: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -89,15 +92,21 @@ pub fn parse_tx(raw: &[u8]) -> Result<ParsedTx> {
         .inputs()
         .into_iter()
         .map(|i| match i {
-            Input::PrevOut { outpoint, .. } => TxInput {
+            Input::PrevOut {
+                outpoint,
+                unlock_script,
+                ..
+            } => TxInput {
                 prev_txid: Some(outpoint.hash.to_string()),
                 prev_n: Some(outpoint.index),
                 coinbase_data: None,
+                script_sig: unlock_script.as_raw_bytes().to_vec(),
             },
             Input::Coinbase { data, .. } => TxInput {
                 prev_txid: None,
                 prev_n: None,
                 coinbase_data: Some(hex::encode(data)),
+                script_sig: Vec::new(),
             },
         })
         .collect();
