@@ -11,7 +11,7 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, bridges, compact, fees, inscriptions, labels, network, pools, price,
+    address, blocks, bridges, compact, fees, inscriptions, labels, network, nft, pools, price,
     protocols, rankings, search, status, supply, tx, upgrades,
 };
 
@@ -109,8 +109,9 @@ protocol makes public."#;
         rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
         compact::range, compact::tx_outputs, bridges::overview,
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
-        inscriptions::image, inscriptions::by_address, inscriptions::collections,
-        inscriptions::collection, inscriptions::sales, inscriptions::offchain,
+        inscriptions::image, inscriptions::by_address,
+        nft::collections, nft::collection, nft::logo, nft::venue_item, nft::venue_item_image,
+        nft::sales,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),

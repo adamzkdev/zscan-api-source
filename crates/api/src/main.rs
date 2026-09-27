@@ -4,6 +4,7 @@ mod docs;
 mod error;
 mod ipfs;
 mod models;
+mod nft_markets;
 mod routes;
 mod ws;
 
@@ -164,10 +165,18 @@ async fn main() -> Result<()> {
             get(routes::inscriptions::by_address),
         )
         .route("/inscriptions/{id}/image", get(routes::inscriptions::image))
-        .route("/collections", get(routes::inscriptions::collections))
-        .route("/collections/{name}", get(routes::inscriptions::collection))
-        .route("/nft-sales", get(routes::inscriptions::sales))
-        .route("/offchain-collections", get(routes::inscriptions::offchain))
+        .route("/collections", get(routes::nft::collections))
+        .route("/collections/{slug}", get(routes::nft::collection))
+        .route("/collections/{slug}/logo", get(routes::nft::logo))
+        .route(
+            "/collections/{slug}/items/{id}",
+            get(routes::nft::venue_item),
+        )
+        .route(
+            "/collections/{slug}/items/{id}/image",
+            get(routes::nft::venue_item_image),
+        )
+        .route("/nft-sales", get(routes::nft::sales))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

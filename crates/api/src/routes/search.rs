@@ -76,7 +76,13 @@ pub async fn search(
         Some(AddressKind::Shielded) => return found("shielded_address", q),
         None => {}
     }
-    // ZRC-721 collection names.
+    // NFT projects by slug or name, then ZRC-721 collection names.
+    if let Some(p) = zscan_chain::nft_projects::projects()
+        .iter()
+        .find(|p| p.slug == lower || p.name.eq_ignore_ascii_case(&q))
+    {
+        return found("collection", p.slug.clone());
+    }
     if lower.len() <= 32 {
         let name: Option<String> = sqlx::query_scalar(
             "SELECT collection FROM inscriptions WHERE media = 'collection' AND collection = $1
