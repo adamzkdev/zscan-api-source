@@ -5208,6 +5208,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "utoipa",
  "zscan-chain",
  "zscan-db",

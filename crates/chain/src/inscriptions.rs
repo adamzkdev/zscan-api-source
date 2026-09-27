@@ -232,8 +232,10 @@ pub fn classify(content_type: &str, body: &[u8]) -> Kind {
                 return Kind::Deploy {
                     collection,
                     supply: json_str(&v, "supply").and_then(|s| s.parse().ok()),
-                    meta: json_str(&v, "meta").filter(|m| is_cid_path(m)),
-                }
+                    // An IPFS folder, or the collection's own HTTPS host (checked when read).
+                    meta: json_str(&v, "meta")
+                        .filter(|m| is_cid_path(m) || m.starts_with("https://")),
+                };
             }
             (Some("mint"), Some(collection)) => {
                 if let Some(item) = json_str(&v, "id").filter(|i| i.len() <= 32) {

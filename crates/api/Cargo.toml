@@ -21,6 +21,7 @@ tracing.workspace = true
 sqlx.workspace = true
 reqwest.workspace = true
 lru.workspace = true
+url = "2"
 tracing-subscriber.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace"] }
