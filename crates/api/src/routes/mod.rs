@@ -1,5 +1,6 @@
 pub mod address;
 pub mod blocks;
+pub mod bridges;
 pub mod compact;
 pub mod fees;
 pub mod labels;

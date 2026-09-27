@@ -150,6 +150,7 @@ async fn main() -> Result<()> {
         .route("/labels", get(routes::labels::list))
         .route("/protocols", get(routes::protocols::list))
         .route("/protocols/{slug}", get(routes::protocols::detail))
+        .route("/bridges", get(routes::bridges::overview))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

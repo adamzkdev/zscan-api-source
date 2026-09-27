@@ -49,6 +49,13 @@
       "category": "bridge",
       "website": "https://www.mayaprotocol.com",
       "description": "Cross-chain liquidity protocol with a native ZEC pool. Vault addresses are read from Maya's public API."
+    },
+    {
+      "slug": "near-intents",
+      "name": "NEAR Intents",
+      "category": "bridge",
+      "website": "https://near-intents.org",
+      "description": "Cross-chain swaps through NEAR. ZEC deposited on Zcash is minted on NEAR as zec.omft.near; holdings are that token's total supply, read from NEAR."
     }
   ]
 }
