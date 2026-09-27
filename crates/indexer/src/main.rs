@@ -138,6 +138,10 @@ async fn main() -> Result<()> {
         );
         move || inscriptions(ctx, on, lag, max, db_max).boxed()
     }));
+    let nft_enrich = tokio::spawn(supervise("nft_enrich", {
+        let on = cfg.inscriptions;
+        move || nft_enrich(ctx, on).boxed()
+    }));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
         move || retention(ctx, days).boxed()
@@ -155,6 +159,7 @@ async fn main() -> Result<()> {
         labels,
         bridges,
         inscriptions,
+        nft_enrich,
         retention
     );
     Ok(())
@@ -621,6 +626,73 @@ async fn inscriptions(
             secs = t0.elapsed().as_secs_f32(),
             "inscription scan"
         );
+    }
+}
+
+/// Enriches indexed NFTs from the chain: marks moves recorded before sale detection existed
+/// that were marketplace sales, and assigns launchpad drops from each mint's commit
+/// transaction.
+async fn nft_enrich(ctx: &Ctx, on: bool) -> Result<()> {
+    if !on || zscan_chain::is_testnet() {
+        return Ok(());
+    }
+    let fetch = |txid: String| async move {
+        let raw = ctx
+            .lwd
+            .raw_tx(&txid)
+            .await?
+            .with_context(|| format!("tx {txid} not found"))?;
+        zscan_chain::parse_tx(&raw.data).with_context(|| format!("decode {txid}"))
+    };
+    loop {
+        let mut busy = false;
+
+        if let Some((from, to)) = ctx.db.sales_backfill_window(2_000).await? {
+            busy = true;
+            let txids = ctx.db.transfer_txids(from, to).await?;
+            let txs: Vec<_> = futures::stream::iter(txids)
+                .map(fetch)
+                .buffered(16)
+                .try_collect()
+                .await?;
+            let mut sales = 0;
+            for tx in &txs {
+                if let Some((_, price)) = zscan_chain::inscriptions::single_sale(tx) {
+                    ctx.db.record_sale(&tx.txid, price).await?;
+                    sales += 1;
+                }
+            }
+            ctx.db.set_sales_cursor(to + 1).await?;
+            info!(from, to, moves = txs.len(), sales, "nft sales backfill");
+        }
+
+        let todo = ctx.db.drops_to_compute(200).await?;
+        if !todo.is_empty() {
+            busy = true;
+            let keys: Vec<(String, String)> = futures::stream::iter(todo)
+                .map(|(id, reveal, minter)| async move {
+                    let reveal = fetch(reveal).await?;
+                    let key = match reveal.inputs.iter().find_map(|i| i.prev_txid.clone()) {
+                        Some(commit) => zscan_chain::inscriptions::drop_key(
+                            &fetch(commit).await?,
+                            minter.as_deref(),
+                        ),
+                        None => String::new(),
+                    };
+                    Ok::<_, anyhow::Error>((id, key))
+                })
+                .buffered(16)
+                .try_collect()
+                .await?;
+            for (id, key) in &keys {
+                ctx.db.set_drop(id, key).await?;
+            }
+            info!(nfts = keys.len(), "nft drops assigned");
+        }
+
+        if !busy {
+            tokio::time::sleep(Duration::from_secs(600)).await;
+        }
     }
 }
 

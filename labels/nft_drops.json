@@ -1,0 +1,18 @@
+[
+  {
+    "key": "t1LGyR9MwRTLUfS4xiTCTvAKZWmVpUfXxtE",
+    "name": "Zemon",
+    "source": "Zerdinals market API (collection/zemon); zemon.cash lists Zemon #0 as inscription 5a08f8cb…35afi0, minted through this drop",
+    "supply": 6666,
+    "website": "https://zemon.cash",
+    "twitter": "https://x.com/zemonzec",
+    "market": "https://zemon.cash/api/stats"
+  },
+  {
+    "key": "t1e3NZwp58J6ypDkV3gYdkVevmufDJidwsu",
+    "name": "ZELIA",
+    "source": "Likely: Zerdinals market API (collection/zelia) describes a 999-item manga-portrait collection matching this drop's art and size",
+    "supply": 999,
+    "twitter": "https://x.com/ELIAosvm"
+  }
+]

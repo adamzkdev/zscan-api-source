@@ -289,11 +289,14 @@ pub struct Inscription {
     pub kind: Kind,
 }
 
-/// Something that happened to an inscription: `inscribed`, `transfer`, `shielded`, `burned`.
+/// Something that happened to an inscription: `inscribed`, `transfer`, `sale`, `shielded`,
+/// `burned`.
 #[derive(Debug, Clone)]
 pub struct Event {
     pub inscription_id: String,
     pub kind: &'static str,
+    /// Sales: what the seller was paid, zatoshis.
+    pub price: Option<i64>,
     pub txid: String,
     pub height: u32,
     pub time: i64,
@@ -506,6 +509,7 @@ impl Engine {
         self.out.events.push(Event {
             inscription_id: p.id.clone(),
             kind: "inscribed",
+            price: None,
             txid: c.tx.txid.clone(),
             height: c.height,
             time: c.time,
@@ -535,21 +539,29 @@ impl Engine {
 
     /// Moves inscriptions whose carrying outputs this transaction spends.
     fn move_spent(&mut self, c: &Ctx) {
-        let spent: Vec<Held> =
+        let spent: Vec<(Held, Option<i64>)> =
             c.tx.inputs
                 .iter()
-                .filter_map(outpoint)
-                .filter_map(|op| self.locations.remove(&op))
-                .flatten()
+                .enumerate()
+                .filter_map(|(n, i)| {
+                    let held = self.locations.remove(&outpoint(i)?)?;
+                    Some((held, sale_price(c.tx, n)))
+                })
+                .flat_map(|(held, price)| held.into_iter().map(move |h| (h, price)))
                 .collect();
         if spent.is_empty() {
             return;
         }
         let dest = successor(c.tx);
-        for h in spent {
+        for (h, price) in spent {
+            // Paying yourself (e.g. withdrawing a listing) isn't a sale.
+            let price = price.filter(|_| {
+                dest.as_ref()
+                    .is_some_and(|(_, to)| to.is_some() && *to != h.owner)
+            });
             let (kind, state, to, location) = match &dest {
                 Some((n, addr)) => (
-                    "transfer",
+                    if price.is_some() { "sale" } else { "transfer" },
                     State::Transparent,
                     addr.clone(),
                     Some((c.tx.txid.clone(), *n)),
@@ -568,6 +580,7 @@ impl Engine {
             self.out.events.push(Event {
                 inscription_id: h.id,
                 kind,
+                price,
                 txid: c.tx.txid.clone(),
                 height: c.height,
                 time: c.time,
@@ -578,6 +591,54 @@ impl Engine {
             });
         }
     }
+}
+
+/// Sighash type of the signature in a scriptSig: the first push shaped like a DER signature
+/// (`0x30 <len> ...`) followed by its hashtype byte.
+pub fn sighash_type(script_sig: &[u8]) -> Option<u8> {
+    tokens(script_sig)?.into_iter().find_map(|t| match t {
+        Tok::Data(d)
+            if (9..=73).contains(&d.len()) && d[0] == 0x30 && d[1] as usize == d.len() - 3 =>
+        {
+            d.last().copied()
+        }
+        _ => None,
+    })
+}
+
+/// `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY`: the seller signs only their input and the output at
+/// the same index (their payment), so a buyer can complete the transaction. Marketplaces
+/// (Zerdinals, Zecscriptions, Universe zmarket) settle sales this way.
+const SALE_SIGHASH: u8 = 0x83;
+
+/// The price of a sale settled through input `n`: the value of output `n`, when the input is
+/// signed SINGLE|ANYONECANPAY.
+fn sale_price(tx: &ParsedTx, n: usize) -> Option<i64> {
+    (sighash_type(&tx.inputs[n].script_sig)? == SALE_SIGHASH)
+        .then(|| tx.outputs.get(n).map(|o| o.value))
+        .flatten()
+}
+
+/// The sale settled by `tx`, when exactly one of its inputs is signed SINGLE|ANYONECANPAY:
+/// `(input index, price)`. Used to re-check moves recorded before sale detection.
+pub fn single_sale(tx: &ParsedTx) -> Option<(usize, i64)> {
+    let mut sales = (0..tx.inputs.len()).filter_map(|n| Some((n, sale_price(tx, n)?)));
+    let first = sales.next()?;
+    sales.next().is_none().then_some(first)
+}
+
+/// The launchpad drop of an IPFS NFT: the address its commit transaction paid the most,
+/// other than P2SH outputs (the reveal chain) and the minter. Ties go to the smallest address,
+/// so every mint of a drop agrees. Empty when the commit pays no one else (a self-mint).
+pub fn drop_key(commit: &ParsedTx, minter: Option<&str>) -> String {
+    commit
+        .outputs
+        .iter()
+        .filter_map(|o| Some((o.address.as_deref()?, o.value)))
+        .filter(|(a, _)| !a.starts_with("t3") && !a.starts_with("t2") && Some(*a) != minter)
+        .max_by(|(a1, v1), (a2, v2)| v1.cmp(v2).then(a2.cmp(a1)))
+        .map(|(a, _)| a.to_string())
+        .unwrap_or_default()
 }
 
 /// Coarse media family of a content type, for filters and previews.
@@ -898,6 +959,96 @@ mod tests {
             ("CATS", Some("bafyone"))
         );
         assert_eq!(e.out.inscriptions.len(), 2);
+    }
+
+    #[test]
+    fn detects_marketplace_sales() {
+        let mut e = Engine::new();
+        let s = envelope("text/plain", b"hi");
+        e.apply_tx(1, 0, 1, &synth("aa", &[("00", 0, s)], &[Some("t1seller")]));
+        // Buyer funds input 0 and receives output 0; the seller's input 1 is signed
+        // SINGLE|ANYONECANPAY and paid by output 1.
+        let signed = |hashtype: u8| {
+            let mut der = vec![0x30, 68];
+            der.extend([0x02; 68]);
+            der.push(hashtype);
+            let mut s = push(&der);
+            s.extend(push(&[0x02; 33]));
+            s
+        };
+        let mut t = synth(
+            "bb",
+            &[("ff", 0, signed(0x01)), ("aa", 0, signed(0x83))],
+            &[Some("t1buyer"), Some("t1seller")],
+        );
+        t.outputs[1].value = 2_500_000;
+        e.apply_tx(2, 0, 1, &t);
+        let ev = &e.out.events[1];
+        assert_eq!((ev.kind, ev.price), ("sale", Some(2_500_000)));
+        assert_eq!(ev.from.as_deref(), Some("t1seller"));
+        assert_eq!(ev.to.as_deref(), Some("t1buyer"));
+        // Paying yourself through a marketplace-style input isn't a sale.
+        let own = synth("dd", &[("bb", 0, signed(0x83))], &[Some("t1buyer")]);
+        e.apply_tx(3, 0, 1, &own);
+        assert_eq!(
+            (e.out.events[2].kind, e.out.events[2].price),
+            ("transfer", None)
+        );
+        // An ordinary SIGHASH_ALL spend is a transfer.
+        e.apply_tx(
+            3,
+            0,
+            1,
+            &synth("cc", &[("bb", 0, signed(0x01))], &[Some("t1c")]),
+        );
+        assert_eq!(
+            (e.out.events[2].kind, e.out.events[2].price),
+            ("transfer", None)
+        );
+    }
+
+    /// A Zerdinals marketplace sale (listed at 0.019 ZEC): the seller's input 2 is signed
+    /// SINGLE|ANYONECANPAY and output 2 pays them.
+    #[test]
+    fn real_marketplace_sale() {
+        let t = tx(include_str!("../testdata/sale_zerdinals.hex"));
+        let signed: Vec<_> = (0..t.inputs.len())
+            .filter(|&n| sighash_type(&t.inputs[n].script_sig) == Some(0x83))
+            .collect();
+        assert_eq!(signed, [2]);
+        assert_eq!(sale_price(&t, 2), Some(1_871_500));
+        assert_eq!(
+            t.outputs[2].address.as_deref(),
+            Some("t1XikaeqGFAo6q8wy2FNG8emFYvGvYp796J")
+        );
+    }
+
+    #[test]
+    fn drop_key_is_the_top_payee() {
+        let mut t = synth(
+            "c",
+            &[("00", 0, sig())],
+            &[
+                Some("t3p2sh"),
+                Some("t1fee"),
+                Some("t1creator"),
+                Some("t1minter"),
+            ],
+        );
+        t.outputs[0].value = 60_000;
+        t.outputs[1].value = 100_000;
+        t.outputs[2].value = 800_000;
+        t.outputs[3].value = 9_000_000;
+        assert_eq!(drop_key(&t, Some("t1minter")), "t1creator");
+        // Equal shares: the smallest address, so every mint agrees.
+        t.outputs[2].value = 100_000;
+        assert_eq!(drop_key(&t, Some("t1minter")), "t1creator");
+        let own = synth(
+            "d",
+            &[("00", 0, sig())],
+            &[Some("t3p2sh"), Some("t1minter")],
+        );
+        assert_eq!(drop_key(&own, Some("t1minter")), "");
     }
 
     #[test]

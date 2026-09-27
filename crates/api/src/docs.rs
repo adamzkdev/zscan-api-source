@@ -110,7 +110,7 @@ protocol makes public."#;
         compact::range, compact::tx_outputs, bridges::overview,
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
         inscriptions::image, inscriptions::by_address, inscriptions::collections,
-        inscriptions::collection,
+        inscriptions::collection, inscriptions::sales, inscriptions::offchain,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),

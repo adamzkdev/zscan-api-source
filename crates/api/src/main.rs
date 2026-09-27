@@ -166,6 +166,8 @@ async fn main() -> Result<()> {
         .route("/inscriptions/{id}/image", get(routes::inscriptions::image))
         .route("/collections", get(routes::inscriptions::collections))
         .route("/collections/{name}", get(routes::inscriptions::collection))
+        .route("/nft-sales", get(routes::inscriptions::sales))
+        .route("/offchain-collections", get(routes::inscriptions::offchain))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

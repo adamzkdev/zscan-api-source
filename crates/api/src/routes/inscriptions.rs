@@ -20,7 +20,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::{ipfs, AppState};
 
 const ROW_COLUMNS: &str = "id, number, content_type, media, content_len, txid, height, time,
-    owner, state, transfers, hidden, collection, item,
+    owner, state, transfers, hidden, collection, item, drop_key,
     CASE WHEN media IN ('text', 'json') THEN substring(content FROM 1 FOR 280) END AS preview_bytes";
 
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
@@ -50,6 +50,12 @@ pub struct InscriptionRow {
     pub collection: Option<String>,
     /// ZRC-721 item id within the collection.
     pub item: Option<String>,
+    /// Name of the launchpad drop it was minted in, when curated.
+    #[sqlx(skip)]
+    pub drop_name: Option<String>,
+    #[serde(skip)]
+    #[schema(ignore)]
+    drop_key: Option<String>,
     /// Start of the body, for text and JSON.
     #[sqlx(skip)]
     pub preview: Option<String>,
@@ -75,6 +81,12 @@ fn blocklist() -> &'static HashSet<String> {
 /// Applies the blocklist and fills the text preview.
 fn moderate(mut r: InscriptionRow) -> InscriptionRow {
     r.hidden |= blocklist().contains(&r.id);
+    if let Some(k) = r.drop_key.as_deref().filter(|k| !k.is_empty()) {
+        r.drop_name = drop_labels()
+            .iter()
+            .find(|l| l.key == k)
+            .map(|l| l.name.clone());
+    }
     let bytes = r.preview_bytes.take();
     if !r.hidden {
         r.preview = bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
@@ -246,8 +258,10 @@ pub async fn stats(State(s): State<AppState>) -> ApiResult<InscriptionStats> {
 
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct InscriptionEvent {
-    /// inscribed | transfer | shielded | burned
+    /// inscribed | transfer | sale | shielded | burned
     pub kind: String,
+    /// Sales: what the seller was paid, zatoshis.
+    pub price: Option<i64>,
     pub txid: String,
     pub height: i32,
     pub time: DateTime<Utc>,
@@ -280,9 +294,17 @@ pub struct InscriptionDetail {
     pub description: Option<String>,
     pub attributes: Vec<Attribute>,
     pub events: Vec<InscriptionEvent>,
+    /// The launchpad drop this NFT was minted in, when it's listed as a collection.
+    pub drop: Option<DropRef>,
     /// Neighbouring indexed inscriptions.
     pub prev: Option<String>,
     pub next: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DropRef {
+    pub slug: String,
+    pub name: String,
 }
 
 /// The inscription with this id (`<txid>i0`) or number.
@@ -372,7 +394,7 @@ pub async fn detail(
         .fetch_one(db)
         .await?;
     let events: Vec<InscriptionEvent> = sqlx::query_as(
-        "SELECT kind, txid, height, time, from_addr, to_addr FROM inscription_events
+        "SELECT kind, price, txid, height, time, from_addr, to_addr FROM inscription_events
          WHERE inscription_id = $1 ORDER BY height, kind <> 'inscribed'",
     )
     .bind(&row.id)
@@ -386,6 +408,22 @@ pub async fn detail(
     .fetch_one(db)
     .await?;
     let (image, _, md) = ipfs_source(&s, &row).await?;
+    let drop_key: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT i.drop_key FROM inscriptions i WHERE i.id = $1 AND i.drop_key <> ''
+           AND (SELECT count(*) FROM inscriptions d WHERE d.drop_key = i.drop_key) >= {MIN_DROP}"
+    ))
+    .bind(&row.id)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    let drop = drop_key.map(|slug| {
+        let name = drop_labels()
+            .iter()
+            .find(|l| l.key == slug)
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| format!("Drop by {}…{}", &slug[..6], &slug[slug.len() - 4..]));
+        DropRef { slug, name }
+    });
     let md_str = |k: &str| {
         md.as_ref()
             .and_then(|m| m.get(k)?.as_str())
@@ -422,6 +460,7 @@ pub async fn detail(
         description: md_str("description"),
         attributes,
         events,
+        drop,
         prev,
         next,
         row,
@@ -595,8 +634,9 @@ pub struct TxInscription {
     pub media: String,
     pub collection: Option<String>,
     pub item: Option<String>,
-    /// inscribed | transfer | shielded | burned
+    /// inscribed | transfer | sale | shielded | burned
     pub kind: String,
+    pub price: Option<i64>,
     pub from_addr: Option<String>,
     pub to_addr: Option<String>,
 }
@@ -605,7 +645,7 @@ pub struct TxInscription {
 pub async fn for_tx(s: &AppState, txid: &str) -> anyhow::Result<Vec<TxInscription>> {
     Ok(sqlx::query_as(
         "SELECT i.id, i.number, i.content_type, i.media, i.collection, i.item, e.kind,
-                e.from_addr, e.to_addr
+                e.price, e.from_addr, e.to_addr
          FROM inscription_events e JOIN inscriptions i ON i.id = e.inscription_id
          WHERE e.txid = $1 ORDER BY i.number",
     )
@@ -614,50 +654,204 @@ pub async fn for_tx(s: &AppState, txid: &str) -> anyhow::Result<Vec<TxInscriptio
     .await?)
 }
 
+/// Curated names for launchpad drops (`labels/nft_drops.json`), keyed by the drop's creator
+/// address.
+#[derive(Debug, Deserialize)]
+struct DropLabel {
+    key: String,
+    name: String,
+    source: String,
+    supply: Option<i64>,
+    website: Option<String>,
+    twitter: Option<String>,
+    /// Marketplace stats endpoint (zemon.cash format: floorZat, listings, volumeZat, sales).
+    market: Option<String>,
+}
+
+fn drop_labels() -> &'static [DropLabel] {
+    static L: OnceLock<Vec<DropLabel>> = OnceLock::new();
+    L.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../../labels/nft_drops.json"))
+            .expect("labels/nft_drops.json")
+    })
+}
+
+/// Fewest items for a launchpad drop to be listed as a collection.
+const MIN_DROP: i64 = 20;
+
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct CollectionRow {
-    /// Uppercase name.
+    /// `zrc721` (declared on chain) or `drop` (launchpad mints grouped by the address their
+    /// commit transactions paid; unverified).
+    pub kind: String,
+    /// URL key: the ZRC-721 name, or the drop's creator address.
+    pub slug: String,
     pub name: String,
-    /// Declared by the deploy.
+    /// Where a drop's name comes from, when curated.
+    #[sqlx(skip)]
+    pub name_source: Option<String>,
+    /// Declared by the deploy (ZRC-721).
     pub supply: Option<i64>,
     /// Items inscribed (every mint counts, duplicates included).
     pub items: i64,
+    /// Distinct item ids (ZRC-721) or images (drops): mints of the same one count once.
+    pub unique_items: i64,
     /// Distinct current owners.
     pub holders: i64,
     /// Items whose tracking ended in a shielded transaction.
     pub shielded: i64,
-    /// Whether a deploy defines the collection (its IPFS metadata, supply).
+    /// Whether a deploy inscription defines the collection (ZRC-721).
     pub deployed: bool,
     pub deploy_inscription: Option<String>,
+    /// ZRC-721 deployer, or the drop's creator address.
     pub deployer: Option<String>,
     /// First item, for a cover image.
     pub cover: Option<String>,
     pub first_time: DateTime<Utc>,
     pub last_time: DateTime<Utc>,
+    /// Marketplace sales detected on chain.
+    pub sales: i64,
+    /// Sum of sale prices, zatoshis.
+    pub volume: i64,
+    pub last_price: Option<i64>,
+    #[sqlx(skip)]
+    pub website: Option<String>,
+    #[sqlx(skip)]
+    pub twitter: Option<String>,
+    /// Order-book figures from the collection's marketplace (off chain), when it has one.
+    #[sqlx(skip)]
+    pub market: Option<MarketStats>,
 }
 
-const COLLECTION_SQL: &str = "
-    WITH items AS (
-        SELECT collection AS name, count(*) AS items,
-               count(DISTINCT owner) AS holders,
-               count(*) FILTER (WHERE state = 'shielded') AS shielded,
-               (array_agg(id ORDER BY number))[1] AS cover,
-               min(time) AS first_time, max(time) AS last_time
-        FROM inscriptions WHERE media = 'collection' GROUP BY collection)
-    SELECT i.name, c.supply, i.items, i.holders, i.shielded, c.name IS NOT NULL AS deployed,
-           c.deploy_inscription, c.deployer, i.cover, i.first_time, i.last_time
-    FROM items i LEFT JOIN collections c ON c.name = i.name";
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MarketStats {
+    pub venue: String,
+    pub url: String,
+    /// Lowest ask, zatoshis.
+    pub floor: Option<i64>,
+    pub listings: Option<i64>,
+    /// As reported by the venue.
+    pub volume: Option<i64>,
+    pub sales: Option<i64>,
+}
 
-/// ZRC-721 collections, largest first.
+/// A venue's stats, cached 5 minutes.
+async fn market_stats(s: &AppState, url: &str) -> Option<MarketStats> {
+    type Entry = (std::time::Instant, Option<MarketStats>);
+    static CACHE: OnceLock<tokio::sync::Mutex<std::collections::HashMap<String, Entry>>> =
+        OnceLock::new();
+    let mut c = CACHE.get_or_init(Default::default).lock().await;
+    if let Some((t, v)) = c.get(url) {
+        if t.elapsed() < std::time::Duration::from_secs(300) {
+            return v.clone();
+        }
+    }
+    let v: Option<serde_json::Value> = match s.http.get(url).send().await {
+        Ok(r) => r.json().await.ok(),
+        Err(e) => {
+            tracing::warn!("market stats {url}: {e:#}");
+            None
+        }
+    };
+    let num = |k: &str| {
+        v.as_ref().and_then(|v| match v.get(k)? {
+            serde_json::Value::String(s) => s.parse().ok(),
+            n => n.as_i64(),
+        })
+    };
+    let host = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(String::from))
+        .unwrap_or_default();
+    let stats = v.as_ref().map(|_| MarketStats {
+        url: format!("https://{host}"),
+        venue: host.clone(),
+        floor: num("floorZat"),
+        listings: num("listings"),
+        volume: num("volumeZat"),
+        sales: num("sales"),
+    });
+    c.insert(url.to_string(), (std::time::Instant::now(), stats.clone()));
+    stats
+}
+
+async fn with_market(s: &AppState, mut c: CollectionRow) -> CollectionRow {
+    if let Some(url) = drop_labels()
+        .iter()
+        .find(|l| l.key == c.slug)
+        .and_then(|l| l.market.as_deref())
+    {
+        c.market = market_stats(s, url).await;
+    }
+    c
+}
+
+fn named(mut c: CollectionRow) -> CollectionRow {
+    if c.kind == "drop" {
+        match drop_labels().iter().find(|l| l.key == c.slug) {
+            Some(l) => {
+                c.name = l.name.clone();
+                c.name_source = Some(l.source.clone());
+                c.supply = c.supply.or(l.supply);
+                c.website = l.website.clone();
+                c.twitter = l.twitter.clone();
+            }
+            None => c.name = format!("Drop by {}…{}", &c.slug[..6], &c.slug[c.slug.len() - 4..]),
+        }
+    }
+    c
+}
+
+/// Collections of both kinds with item, holder and sale aggregates; `$1` filters by slug.
+fn collection_sql(filter: &str) -> String {
+    format!(
+        "WITH members AS (
+            SELECT 'zrc721' AS kind, collection AS slug, i.* FROM inscriptions i
+            WHERE media = 'collection'
+            UNION ALL
+            SELECT 'drop', drop_key, i.* FROM inscriptions i
+            WHERE drop_key IS NOT NULL AND drop_key <> ''),
+        groups AS (
+            SELECT kind, slug, count(*) AS items,
+                   count(DISTINCT coalesce(item, ipfs, sha256)) AS unique_items,
+                   count(DISTINCT owner) AS holders,
+                   count(*) FILTER (WHERE state = 'shielded') AS shielded,
+                   (array_agg(id ORDER BY number))[1] AS cover,
+                   min(time) AS first_time, max(time) AS last_time
+            FROM members GROUP BY kind, slug
+            HAVING kind = 'zrc721' OR count(*) >= {MIN_DROP}),
+        sales AS (
+            SELECT m.kind, m.slug, count(*) AS sales, sum(e.price)::bigint AS volume,
+                   (array_agg(e.price ORDER BY e.height DESC))[1] AS last_price
+            FROM members m JOIN inscription_events e ON e.inscription_id = m.id
+            WHERE e.price IS NOT NULL GROUP BY m.kind, m.slug)
+        SELECT g.kind, g.slug, g.slug AS name, c.supply, g.items, g.unique_items, g.holders,
+               g.shielded,
+               c.name IS NOT NULL AS deployed, c.deploy_inscription,
+               CASE WHEN g.kind = 'drop' THEN g.slug ELSE c.deployer END AS deployer,
+               g.cover, g.first_time, g.last_time,
+               coalesce(s.sales, 0) AS sales, coalesce(s.volume, 0) AS volume, s.last_price
+        FROM groups g
+        LEFT JOIN collections c ON g.kind = 'zrc721' AND c.name = g.slug
+        LEFT JOIN sales s ON s.kind = g.kind AND s.slug = g.slug
+        {filter}"
+    )
+}
+
+/// NFT collections: ZRC-721 collections declared on chain, and launchpad drops grouped from
+/// their mint transactions. Largest first.
 #[utoipa::path(get, path = "/v1/collections",
     responses((status = 200, body = [CollectionRow])), tag = "inscriptions")]
 pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionRow>> {
-    let rows = sqlx::query_as(&format!(
-        "{COLLECTION_SQL} ORDER BY i.items DESC, i.name LIMIT 500"
-    ))
-    .fetch_all(&s.db.pool)
-    .await?;
-    Ok(Json(rows))
+    let rows: Vec<CollectionRow> =
+        sqlx::query_as(&collection_sql("ORDER BY g.items DESC, g.slug LIMIT 500"))
+            .fetch_all(&s.db.pool)
+            .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        out.push(with_market(&s, named(r)).await);
+    }
+    Ok(Json(out))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -672,45 +866,75 @@ pub struct Holder {
     pub count: i64,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct Sale {
+    pub id: String,
+    pub number: i64,
+    pub media: String,
+    pub collection: Option<String>,
+    pub item: Option<String>,
+    /// Paid to the seller, zatoshis.
+    pub price: i64,
+    pub seller: Option<String>,
+    pub buyer: Option<String>,
+    pub txid: String,
+    pub height: i32,
+    pub time: DateTime<Utc>,
+}
+
+const SALE_COLUMNS: &str = "i.id, i.number, i.media, i.collection, i.item, e.price,
+    e.from_addr AS seller, e.to_addr AS buyer, e.txid, e.height, e.time";
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CollectionDetail {
     #[serde(flatten)]
     pub collection: CollectionRow,
-    /// IPFS directory of the item metadata.
+    /// IPFS or HTTPS folder of the item metadata (ZRC-721).
     pub meta: Option<String>,
     /// Items in inscription order, 48 per page.
     pub items_page: Vec<InscriptionRow>,
     pub next: Option<i64>,
     /// Top 25 holders.
     pub holders_list: Vec<Holder>,
+    /// Latest 25 sales.
+    pub recent_sales: Vec<Sale>,
 }
 
-/// One ZRC-721 collection: items, holders and its deploy.
-#[utoipa::path(get, path = "/v1/collections/{name}", params(("name" = String, Path), CollectionQuery),
+/// One collection (ZRC-721 name or drop creator address): items, holders and sales.
+#[utoipa::path(get, path = "/v1/collections/{slug}", params(("slug" = String, Path), CollectionQuery),
     responses((status = 200, body = CollectionDetail), (status = 404)), tag = "inscriptions")]
 pub async fn collection(
     State(s): State<AppState>,
-    Path(name): Path<String>,
+    Path(slug): Path<String>,
     Query(q): Query<CollectionQuery>,
 ) -> ApiResult<CollectionDetail> {
-    let name = name.trim().to_uppercase();
+    let slug = slug.trim().to_string();
     let db = &s.db.pool;
-    let collection: CollectionRow = sqlx::query_as(&format!("{COLLECTION_SQL} WHERE i.name = $1"))
-        .bind(&name)
-        .fetch_optional(db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Collection {name} not found")))?;
+    let row: Option<CollectionRow> = sqlx::query_as(&collection_sql(
+        "WHERE g.slug = $1 OR (g.kind = 'zrc721' AND g.slug = upper($1)) LIMIT 1",
+    ))
+    .bind(&slug)
+    .fetch_optional(db)
+    .await?;
+    let collection =
+        named(row.ok_or_else(|| ApiError::NotFound(format!("Collection {slug} not found")))?);
+    let collection = with_market(&s, collection).await;
+    let member = if collection.kind == "drop" {
+        "i.drop_key = $1"
+    } else {
+        "i.media = 'collection' AND i.collection = $1"
+    };
     let meta: Option<String> = sqlx::query_scalar("SELECT meta FROM collections WHERE name = $1")
-        .bind(&name)
+        .bind(&collection.slug)
         .fetch_optional(db)
         .await?
         .flatten();
     let mut items: Vec<InscriptionRow> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM inscriptions
-         WHERE media = 'collection' AND collection = $1 AND ($2::bigint IS NULL OR number > $2)
+        "SELECT {ROW_COLUMNS} FROM inscriptions i
+         WHERE {member} AND ($2::bigint IS NULL OR number > $2)
          ORDER BY number LIMIT 49"
     ))
-    .bind(&name)
+    .bind(&collection.slug)
     .bind(q.cursor)
     .fetch_all(db)
     .await?;
@@ -718,12 +942,19 @@ pub async fn collection(
         items.truncate(48);
         items.last().map(|r| r.number)
     });
-    let holders_list = sqlx::query_as(
-        "SELECT owner AS address, count(*) AS count FROM inscriptions
-         WHERE media = 'collection' AND collection = $1 AND owner IS NOT NULL
-         GROUP BY owner ORDER BY 2 DESC, 1 LIMIT 25",
-    )
-    .bind(&name)
+    let holders_list = sqlx::query_as(&format!(
+        "SELECT owner AS address, count(*) AS count FROM inscriptions i
+         WHERE {member} AND owner IS NOT NULL
+         GROUP BY owner ORDER BY 2 DESC, 1 LIMIT 25"
+    ))
+    .bind(&collection.slug)
+    .fetch_all(db)
+    .await?;
+    let recent_sales = sqlx::query_as(&format!(
+        "SELECT {SALE_COLUMNS} FROM inscription_events e JOIN inscriptions i ON i.id = e.inscription_id
+         WHERE e.price IS NOT NULL AND {member} ORDER BY e.height DESC LIMIT 25"
+    ))
+    .bind(&collection.slug)
     .fetch_all(db)
     .await?;
     Ok(Json(CollectionDetail {
@@ -732,5 +963,86 @@ pub async fn collection(
         items_page: items.into_iter().map(moderate).collect(),
         next: next.flatten(),
         holders_list,
+        recent_sales,
     }))
+}
+
+/// Latest NFT sales detected on chain, across marketplaces.
+#[utoipa::path(get, path = "/v1/nft-sales",
+    responses((status = 200, body = [Sale])), tag = "inscriptions")]
+pub async fn sales(State(s): State<AppState>) -> ApiResult<Vec<Sale>> {
+    let rows = sqlx::query_as(&format!(
+        "SELECT {SALE_COLUMNS} FROM inscription_events e JOIN inscriptions i ON i.id = e.inscription_id
+         WHERE e.price IS NOT NULL ORDER BY e.height DESC LIMIT 50"
+    ))
+    .fetch_all(&s.db.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OffchainCollection {
+    pub name: String,
+    /// Where it trades (its own database, not the Zcash chain).
+    pub venue: String,
+    pub url: String,
+    pub supply: Option<i64>,
+    /// Lowest ask, ZEC (decimal string, as reported).
+    pub floor_zec: Option<String>,
+    pub volume_24h_zec: Option<String>,
+    pub volume_total_zec: Option<String>,
+    pub sales_24h: Option<i64>,
+    pub sales_total: Option<i64>,
+    /// An item picture URL on the venue.
+    pub image: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// NFT collections that trade off chain (their items aren't Zcash inscriptions), as reported by
+/// their venue. Refreshed every 5 minutes.
+#[utoipa::path(get, path = "/v1/offchain-collections",
+    responses((status = 200, body = [OffchainCollection])), tag = "inscriptions")]
+pub async fn offchain(State(s): State<AppState>) -> ApiResult<Vec<OffchainCollection>> {
+    static CACHE: OnceLock<
+        tokio::sync::Mutex<(Option<std::time::Instant>, Vec<OffchainCollection>)>,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut c = cache.lock().await;
+    if c.0
+        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(300))
+    {
+        return Ok(Json(c.1.clone()));
+    }
+    let mut out = Vec::new();
+    match s
+        .http
+        .get("https://zilkroad.com/api/market/stats")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => {
+                let st = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
+                let n = |k: &str| v.get(k).and_then(|x| x.as_i64());
+                out.push(OffchainCollection {
+                    name: "zkSNARKs".into(),
+                    venue: "Zilkroad".into(),
+                    url: "https://zilkroad.com".into(),
+                    supply: n("supply"),
+                    floor_zec: st("floorZec"),
+                    volume_24h_zec: st("volume24hZec"),
+                    volume_total_zec: st("volumeTotalZec"),
+                    sales_24h: n("sales24h"),
+                    sales_total: n("salesTotal"),
+                    image: Some("https://zilkroad.com/api/art/1".into()),
+                    updated_at: st("updatedAt"),
+                });
+            }
+            Err(e) => tracing::warn!("zilkroad stats: {e:#}"),
+        },
+        Err(e) => tracing::warn!("zilkroad stats: {e:#}"),
+    }
+    *c = (Some(std::time::Instant::now()), out.clone());
+    Ok(Json(out))
 }
