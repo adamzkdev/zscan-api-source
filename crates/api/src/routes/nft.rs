@@ -156,6 +156,9 @@ pub struct CollectionRow {
     pub kind: String,
     /// Supply the project declares.
     pub supply: Option<i64>,
+    /// When the collection launched (YYYY-MM-DD): the project's mint date, else its first
+    /// on-chain mint.
+    pub launched: Option<String>,
     /// Picture for the collection: path of an image served by this API.
     pub image: Option<String>,
     /// Registry facts; `None` for on-chain collections no project claims.
@@ -201,6 +204,12 @@ async fn row(p: Option<&'static Project>, g: Option<&Group>) -> CollectionRow {
             name: p.name.clone(),
             kind: p.kind.clone(),
             supply: p.supply.or(g.and_then(|g| g.supply)),
+            launched: p
+                .minted_at
+                .as_ref()
+                .filter(|d| d.len() >= 10 && d.as_bytes()[4] == b'-')
+                .map(|d| d[..10].to_string())
+                .or_else(|| g.map(|g| g.first_time.format("%Y-%m-%d").to_string())),
             image: p
                 .logo
                 .as_ref()
@@ -221,6 +230,7 @@ async fn row(p: Option<&'static Project>, g: Option<&Group>) -> CollectionRow {
                 },
                 kind: "inscription".into(),
                 supply: g.supply,
+                launched: Some(g.first_time.format("%Y-%m-%d").to_string()),
                 image: cover,
                 project: None,
                 onchain: Some(onchain_of(g)),
@@ -265,23 +275,14 @@ fn group_sql(filter: &str) -> String {
     )
 }
 
-/// Listing order: on-chain collections by size, then projects by how verifiable they are.
-fn rank(r: &CollectionRow) -> (usize, i64) {
-    let kind = nft_projects::KINDS
-        .iter()
-        .position(|k| *k == r.kind)
-        .unwrap_or(9);
-    let size = r
-        .onchain
-        .as_ref()
-        .map(|o| o.unique_items)
-        .or(r.supply)
-        .unwrap_or(0);
-    (if r.onchain.is_some() { 0 } else { 1 + kind }, -size)
+/// Listing order: newest launches first (ISO dates sort as text), undated last.
+fn rank(r: &CollectionRow) -> std::cmp::Reverse<String> {
+    std::cmp::Reverse(r.launched.clone().unwrap_or_default())
 }
 
-/// Zcash NFT collections: every project in the registry, with on-chain figures where ZScan
-/// indexes its items, plus on-chain collections no project claims yet.
+/// Zcash NFT collections, newest first: every project in the registry, with on-chain figures
+/// where ZScan indexes its items, plus ZRC-721 collections no project claims yet. (Launchpad
+/// drops no project claims stay reachable by address but aren't listed.)
 #[utoipa::path(get, path = "/v1/collections",
     responses((status = 200, body = [CollectionRow])), tag = "inscriptions")]
 pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionRow>> {
@@ -296,7 +297,7 @@ pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionR
         rows.push(row(Some(p), g).await);
     }
     for g in groups.iter().filter(|g| {
-        project_of(g).is_none() && (g.kind == "drop" || g.items >= MIN_UNCLAIMED_ZRC721)
+        project_of(g).is_none() && g.kind == "zrc721" && g.items >= MIN_UNCLAIMED_ZRC721
     }) {
         rows.push(row(None, Some(g)).await);
     }

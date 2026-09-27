@@ -11,12 +11,23 @@
       "logo": "https://zemon.cash/img/0.jpg?v=verified-1",
       "supply": 6666,
       "minted_at": "2025-11-16",
-      "onchain": { "drop": "t1LGyR9MwRTLUfS4xiTCTvAKZWmVpUfXxtE" },
-      "market": { "kind": "zemon", "url": "https://zemon.cash" },
+      "onchain": {
+        "drop": "t1LGyR9MwRTLUfS4xiTCTvAKZWmVpUfXxtE"
+      },
+      "market": {
+        "kind": "zemon",
+        "url": "https://zemon.cash"
+      },
       "confidence": "verified",
       "sources": [
-        { "label": "Zerdinals market API", "url": "https://market-api.zerdinals.com/api/market/collection/zemon" },
-        { "label": "zemon.cash lists Zemon #0 as inscription 5a08f8cb…35afi0, minted in this drop", "url": "https://zemon.cash/api/zemons/0" }
+        {
+          "label": "Zerdinals market API",
+          "url": "https://market-api.zerdinals.com/api/market/collection/zemon"
+        },
+        {
+          "label": "zemon.cash lists Zemon #0 as inscription 5a08f8cb…35afi0, minted in this drop",
+          "url": "https://zemon.cash/api/zemons/0"
+        }
       ]
     },
     {
@@ -26,11 +37,19 @@
       "kind": "inscription",
       "minted_at": "2025-11-22",
       "supply": 10000,
-      "onchain": { "zrc721": "ZGODS" },
+      "onchain": {
+        "zrc721": "ZGODS"
+      },
       "confidence": "verified",
       "sources": [
-        { "label": "Deploy inscription on chain", "url": "https://zscan.cash/inscription/65405e4fd4b5e45d2b560c2fd7810b1644ae78ce30bc1fc9790e391247091df7i0" },
-        { "label": "Universe indexer (zrunes.io)", "url": "https://zrunes.io/idx/zcash-metaprotocols/nft-collections/zgods" }
+        {
+          "label": "Deploy inscription on chain",
+          "url": "https://zscan.cash/inscription/65405e4fd4b5e45d2b560c2fd7810b1644ae78ce30bc1fc9790e391247091df7i0"
+        },
+        {
+          "label": "Universe indexer (zrunes.io)",
+          "url": "https://zrunes.io/idx/zcash-metaprotocols/nft-collections/zgods"
+        }
       ]
     },
     {
@@ -44,12 +63,24 @@
       "supply": 10000,
       "minted_at": "2026-09-17",
       "mint_price_zec": 1.5,
-      "market": { "kind": "zilkroad", "url": "https://zilkroad.com" },
+      "market": {
+        "kind": "zilkroad",
+        "url": "https://zilkroad.com"
+      },
       "confidence": "verified",
       "sources": [
-        { "label": "Zilkroad market", "url": "https://zilkroad.com" },
-        { "label": "PANews: 8 Zcash NFT projects", "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c" },
-        { "label": "Auction analysis", "url": "https://paragraph.com/@onchaindiary/zksnarks-auction-what-bidders-bought-1" }
+        {
+          "label": "Zilkroad market",
+          "url": "https://zilkroad.com"
+        },
+        {
+          "label": "PANews: 8 Zcash NFT projects",
+          "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c"
+        },
+        {
+          "label": "Auction analysis",
+          "url": "https://paragraph.com/@onchaindiary/zksnarks-auction-what-bidders-bought-1"
+        }
       ]
     },
     {
@@ -60,10 +91,15 @@
       "x": "https://x.com/ELIAosvm",
       "logo": "ipfs://bafybeiaeic6r4mjys5mvjyi73v76u2yox3lxjibmysunqn3vvcnkkvb73u",
       "supply": 999,
-      "onchain": { "drop": "t1e3NZwp58J6ypDkV3gYdkVevmufDJidwsu" },
+      "onchain": {
+        "drop": "t1e3NZwp58J6ypDkV3gYdkVevmufDJidwsu"
+      },
       "confidence": "likely",
       "sources": [
-        { "label": "Zerdinals market API: collection card with matching art and supply", "url": "https://market-api.zerdinals.com/api/market/collection/zelia" }
+        {
+          "label": "Zerdinals market API: collection card with matching art and supply",
+          "url": "https://market-api.zerdinals.com/api/market/collection/zelia"
+        }
       ]
     },
     {
@@ -76,11 +112,19 @@
       "supply": 1000,
       "minted_at": "2026-09-21",
       "mint_price_zec": 0,
-      "onchain": { "zrc721": "ZECFRUITS" },
+      "onchain": {
+        "zrc721": "ZECFRUITS"
+      },
       "confidence": "verified",
       "sources": [
-        { "label": "Collection site", "url": "https://zecfruits-assets.pages.dev" },
-        { "label": "Universe indexer (zrunes.io)", "url": "https://zrunes.io/idx/zcash-metaprotocols/nft-collections/zecfruits" }
+        {
+          "label": "Collection site",
+          "url": "https://zecfruits-assets.pages.dev"
+        },
+        {
+          "label": "Universe indexer (zrunes.io)",
+          "url": "https://zrunes.io/idx/zcash-metaprotocols/nft-collections/zecfruits"
+        }
       ]
     },
     {
@@ -93,12 +137,23 @@
       "logo": "https://zeccat.com/brand/launch/logo-402-fa1599b81180.webp",
       "supply": 3333,
       "mint_price_zec": 0.001,
-      "onchain": { "zrc721": "ZECATS" },
-      "market": { "kind": "zeccat", "url": "https://zeccat.com" },
+      "onchain": {
+        "zrc721": "ZECATS"
+      },
+      "market": {
+        "kind": "zeccat",
+        "url": "https://zeccat.com"
+      },
       "confidence": "likely",
       "sources": [
-        { "label": "Zeccats site", "url": "https://zeccat.com" },
-        { "label": "PANews: 8 Zcash NFT projects", "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c" }
+        {
+          "label": "Zeccats site",
+          "url": "https://zeccat.com"
+        },
+        {
+          "label": "PANews: 8 Zcash NFT projects",
+          "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c"
+        }
       ]
     },
     {
@@ -110,7 +165,10 @@
       "supply": 3600,
       "confidence": "likely",
       "sources": [
-        { "label": "Zerdinals market API", "url": "https://market-api.zerdinals.com/api/market/collection/zcashpunks" }
+        {
+          "label": "Zerdinals market API",
+          "url": "https://market-api.zerdinals.com/api/market/collection/zcashpunks"
+        }
       ]
     },
     {
@@ -123,91 +181,11 @@
       "supply": 250,
       "confidence": "likely",
       "sources": [
-        { "label": "Zerdinals market API", "url": "https://market-api.zerdinals.com/api/market/collection/zerdinalsfdt" }
+        {
+          "label": "Zerdinals market API",
+          "url": "https://market-api.zerdinals.com/api/market/collection/zerdinalsfdt"
+        }
       ]
-    },
-    {
-      "slug": "zecpunks",
-      "name": "Zec Punks",
-      "description": "1,555 24×24 pixel punks minted to shielded addresses, issued through ZecBit as Zcash Shielded Assets on testnet.",
-      "kind": "zsa-testnet",
-      "website": "https://www.zecpunks.xyz",
-      "x": "https://x.com/zecpunksnft",
-      "logo": "https://www.zecpunks.xyz/logo.png",
-      "supply": 1555,
-      "minted_at": "2026-09-15",
-      "mint_price_zec": 0.015,
-      "marketplaces": [
-        { "name": "ZecBit", "url": "https://zecbit.net/collection/zecpunks" },
-        { "name": "ZEC MARKET", "url": "https://zecmarket.io" }
-      ],
-      "confidence": "verified",
-      "sources": [
-        { "label": "Zec Punks presale page", "url": "https://www.zecpunks.xyz/presale" },
-        { "label": "ZEC MARKET", "url": "https://zecmarket.io" }
-      ]
-    },
-    {
-      "slug": "zecbit-genesis",
-      "name": "ZecBit Genesis",
-      "description": "3,333 pixel PFPs free-minted on ZecBit as Zcash Shielded Assets on testnet, to migrate to mainnet once ZSA activates.",
-      "kind": "zsa-testnet",
-      "website": "https://zecbit.net",
-      "x": "https://x.com/zec_bit",
-      "supply": 3333,
-      "minted_at": "2026-09-03",
-      "mint_price_zec": 0,
-      "marketplaces": [
-        { "name": "ZecBit", "url": "https://zecbit.net/collection/zecbit-genesis" },
-        { "name": "ZEC MARKET", "url": "https://zecmarket.io" }
-      ],
-      "confidence": "verified",
-      "sources": [
-        { "label": "ZCG grant proposal: ZecBit NFT infrastructure for ZSA", "url": "https://forum.zcashcommunity.com/t/grant-proposal-zecbit-nft-infrastructure-for-zcash-shielded-assets/57280" },
-        { "label": "PANews: 8 Zcash NFT projects", "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c" }
-      ]
-    },
-    {
-      "slug": "zecfrogs",
-      "name": "ZECFROG Genesis",
-      "description": "1,234 pixel frogs on the ZecPad shielded launchpad, minted as Zcash Shielded Assets on testnet.",
-      "kind": "zsa-testnet",
-      "website": "https://zecpad.net/launchpad",
-      "x": "https://x.com/zecfrogs",
-      "logo": "https://zecpad.net/assets/brand/mint-frog.png",
-      "supply": 1234,
-      "mint_price_zec": 0.00675,
-      "market": { "kind": "zecpad", "url": "https://zecpad.net/market", "id": "zecfrog-genesis" },
-      "confidence": "verified",
-      "sources": [
-        { "label": "ZecPad collection API", "url": "https://zecpad.net/api/collection?slug=zecfrog-genesis" }
-      ]
-    },
-    {
-      "slug": "zecutives",
-      "name": "Zecutives",
-      "description": "1,111 pixel executive avatars, ZEC MARKET's native drop, minted by paying or burning the $EXZEC token on Solana.",
-      "kind": "other-chain",
-      "website": "https://zecmarket.io",
-      "supply": 1111,
-      "marketplaces": [{ "name": "ZEC MARKET", "url": "https://zecmarket.io" }],
-      "confidence": "verified",
-      "sources": [
-        { "label": "ZEC MARKET", "url": "https://zecmarket.io" },
-        { "label": "PANews: 8 Zcash NFT projects", "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c" }
-      ]
-    },
-    {
-      "slug": "zaddr",
-      "name": "ZADDR",
-      "description": "2,800 pixel faces planned for Zcash's Orchard shielded pool: \"Every face is public. Every owner isn't.\" Whitelist closed, not minted yet.",
-      "kind": "upcoming",
-      "website": "https://zaddr.net",
-      "x": "https://x.com/zaddrnet",
-      "logo": "https://zaddr.net/assets/brand/kit/social/og-1200x630.png",
-      "supply": 2800,
-      "confidence": "verified",
-      "sources": [{ "label": "ZADDR site and stats API", "url": "https://zaddr.net/api/stats" }]
     }
   ]
 }
