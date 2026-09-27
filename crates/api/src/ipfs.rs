@@ -1,6 +1,6 @@
 //! IPFS reads for NFTs whose image lives off chain (ZRC-721 collection metadata, Zerdinals IPFS
-//! pointers). Fetched server-side through one gateway so visitors never contact it, and kept in
-//! small in-memory caches: IPFS content is immutable.
+//! pointers). Fetched server-side through public gateways so visitors never contact them, and
+//! kept in small in-memory caches: IPFS content is immutable.
 
 use std::num::NonZeroUsize;
 use std::sync::{Mutex, OnceLock};
@@ -14,14 +14,27 @@ const MAX_BYTES: usize = 8 << 20;
 /// Memory for cached images.
 const IMAGE_BUDGET: usize = 96 << 20;
 
-fn gateway() -> &'static str {
-    static G: OnceLock<String> = OnceLock::new();
+/// Gateways tried in order (`IPFS_GATEWAY`, comma-separated). Public gateways throttle cloud
+/// addresses unevenly, so one answering 429 is skipped for a while.
+fn gateways() -> &'static [String] {
+    static G: OnceLock<Vec<String>> = OnceLock::new();
     G.get_or_init(|| {
         std::env::var("IPFS_GATEWAY")
-            .unwrap_or_else(|_| "https://gateway.pinata.cloud/ipfs".into())
-            .trim_end_matches('/')
-            .to_string()
+            .unwrap_or_else(|_| DEFAULT_GATEWAYS.into())
+            .split(',')
+            .map(|g| g.trim().trim_end_matches('/').to_string())
+            .filter(|g| !g.is_empty())
+            .collect()
     })
+}
+
+const DEFAULT_GATEWAYS: &str = "https://gateway.pinit.io/ipfs,https://gateway.pinata.cloud/ipfs";
+const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn cooling() -> &'static Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static C: OnceLock<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        OnceLock::new();
+    C.get_or_init(Default::default)
 }
 
 /// `ipfs://X`, `https://<any gateway>/ipfs/X` or a bare CID path, as a checked CID path.
@@ -48,17 +61,25 @@ fn client() -> &'static (reqwest::Client, tokio::sync::Semaphore) {
     })
 }
 
-async fn get(path: &str) -> Result<(Option<String>, Vec<u8>)> {
-    let Some(path) = cid_path(path) else {
-        bail!("not an IPFS path");
-    };
+/// What a caller expects back; a gateway answering with something else (e.g. an HTML error
+/// page with status 200) is skipped.
+#[derive(Clone, Copy, PartialEq)]
+enum Want {
+    Json,
+    File,
+}
+
+async fn fetch(gateway: &str, path: &str) -> Result<(Option<String>, Vec<u8>)> {
     let (http, slots) = client();
     let _slot = slots.acquire().await?;
-    let mut res = http
-        .get(format!("{}/{path}", gateway()))
-        .send()
-        .await?
-        .error_for_status()?;
+    let res = http.get(format!("{gateway}/{path}")).send().await?;
+    if res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        cooling()
+            .lock()
+            .unwrap()
+            .insert(gateway.to_string(), std::time::Instant::now() + COOLDOWN);
+    }
+    let mut res = res.error_for_status()?;
     let ctype = res
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -72,6 +93,42 @@ async fn get(path: &str) -> Result<(Option<String>, Vec<u8>)> {
         }
     }
     Ok((ctype, body))
+}
+
+/// Reads a file from the first gateway that returns what's wanted. `Ok(None)` when every
+/// gateway answered but none had it; `Err` when none could answer (throttled, down).
+async fn get(path: &str, want: Want) -> Result<Option<(Option<String>, Vec<u8>)>> {
+    let Some(path) = cid_path(path) else {
+        bail!("not an IPFS path");
+    };
+    let mut answered = false;
+    let mut last_err = None;
+    for g in gateways() {
+        let cool = cooling().lock().unwrap().get(g).copied();
+        if cool.is_some_and(|until| until > std::time::Instant::now()) {
+            continue;
+        }
+        match fetch(g, &path).await {
+            Ok((ctype, body)) => {
+                answered = true;
+                let html = ctype.as_deref().is_some_and(|c| c.starts_with("text/html"));
+                let ok = match want {
+                    Want::Json => serde_json::from_slice::<serde_json::Value>(&body)
+                        .is_ok_and(|v| v.is_object()),
+                    Want::File => !html && !body.is_empty(),
+                };
+                if ok {
+                    return Ok(Some((ctype, body)));
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match (answered, last_err) {
+        (false, Some(e)) => Err(e),
+        (false, None) => bail!("all IPFS gateways are cooling down"),
+        _ => Ok(None),
+    }
 }
 
 type Cache<V> = Mutex<LruCache<String, V>>;
@@ -94,10 +151,8 @@ pub async fn metadata(meta: &str, item: &str) -> Option<serde_json::Value> {
     if let Some(v) = metadata_cache().lock().unwrap().get(&key) {
         return v.clone();
     }
-    let v = match get(&key).await {
-        Ok((_, body)) => serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .filter(|v| v.is_object()),
+    let v = match get(&key, Want::Json).await {
+        Ok(found) => found.and_then(|(_, body)| serde_json::from_slice(&body).ok()),
         Err(e) => {
             tracing::warn!("ipfs metadata {key}: {e:#}");
             // Transient failures aren't cached.
@@ -136,7 +191,9 @@ pub async fn image(path: &str, declared: Option<&str>) -> Result<(String, Vec<u8
     if let Some(hit) = images().lock().unwrap().lru.get(path) {
         return Ok(hit.clone());
     }
-    let (ctype, body) = get(path).await?;
+    let (ctype, body) = get(path, Want::File)
+        .await?
+        .context("no IPFS gateway has this file")?;
     let ctype = ctype
         .filter(|c| c.starts_with("image/"))
         .or_else(|| {

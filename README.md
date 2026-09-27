@@ -103,7 +103,7 @@ START_HEIGHT=0 API_PORT=8081 docker compose -f docker-compose.yml -f docker-comp
 | `INSCRIPTIONS_MAX_DB_MB` | indexer | none (pauses the scan while the database is larger, for small volumes) |
 | `INSCRIPTION_CONTENT_MAX` | indexer | 61200 bytes; larger content is rebuilt from the chain on request |
 | `INSCRIPTION_BLOCKLIST` | api | none (comma-separated inscription ids never served) |
-| `IPFS_GATEWAY` | api | `https://gateway.pinata.cloud/ipfs` (collection metadata and IPFS images, relayed) |
+| `IPFS_GATEWAY` | api | `https://gateway.pinit.io/ipfs,https://gateway.pinata.cloud/ipfs` (tried in order; collection metadata and IPFS images, relayed) |
 | `API_ADDR`, `API_RATE_PER_SEC` | api | `0.0.0.0:8080`, 10 |
 | `API_INTERNAL_URL` | web | `http://127.0.0.1:8080` (read at runtime) |
 | `ZSCAN_NETWORK`, `PUBLIC_WS_URL`, `MAINNET_URL`, `TESTNET_URL` | web | network badge, live events, network switcher |

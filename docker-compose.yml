@@ -64,7 +64,7 @@ services:
       LWD_RATE_PER_SEC: ${API_LWD_RATE_PER_SEC:-20}
       API_RATE_PER_SEC: ${API_RATE_PER_SEC:-10}
       INSCRIPTION_BLOCKLIST: ${INSCRIPTION_BLOCKLIST:-}
-      IPFS_GATEWAY: ${IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs}
+      IPFS_GATEWAY: ${IPFS_GATEWAY:-https://gateway.pinit.io/ipfs,https://gateway.pinata.cloud/ipfs}
       API_ADDR: 0.0.0.0:8080
       RUST_LOG: ${RUST_LOG:-info}
     ports:
