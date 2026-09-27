@@ -32,13 +32,16 @@ struct Config {
     backfill_concurrency: usize,
     /// Keep transactions for this many days only (blocks are always kept). Unset keeps all.
     tx_retention_days: Option<u32>,
-    /// Scan for inscriptions and ZRC-20 (`INSCRIPTIONS=off` disables it).
+    /// Scan for inscriptions (`INSCRIPTIONS=off` disables it).
     inscriptions: bool,
     /// Blocks kept between the inscription scan and the tip, so reorgs don't reach it.
     inscriptions_lag: u32,
     /// Inscription content above this size (bytes) isn't stored; the API rebuilds it from the
     /// chain on request.
     inscription_content_max: usize,
+    /// Pause the inscription scan while the database is larger than this (MB), so it can't
+    /// fill a small volume. Unset = no limit.
+    inscriptions_max_db_mb: Option<i64>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -63,6 +66,10 @@ impl Config {
             inscriptions: env_or("INSCRIPTIONS", "on") != "off",
             inscriptions_lag: env_or("INSCRIPTIONS_LAG", "10").parse()?,
             inscription_content_max: env_or("INSCRIPTION_CONTENT_MAX", "61200").parse()?,
+            inscriptions_max_db_mb: match std::env::var("INSCRIPTIONS_MAX_DB_MB") {
+                Ok(v) if !v.trim().is_empty() => Some(v.trim().parse()?),
+                _ => None,
+            },
         })
     }
 }
@@ -123,12 +130,13 @@ async fn main() -> Result<()> {
     let labels = tokio::spawn(supervise("labels", move || labels(ctx).boxed()));
     let bridges = tokio::spawn(supervise("bridges", move || bridges(ctx).boxed()));
     let inscriptions = tokio::spawn(supervise("inscriptions", {
-        let (on, lag, max) = (
+        let (on, lag, max, db_max) = (
             cfg.inscriptions,
             cfg.inscriptions_lag,
             cfg.inscription_content_max,
+            cfg.inscriptions_max_db_mb,
         );
-        move || inscriptions(ctx, on, lag, max).boxed()
+        move || inscriptions(ctx, on, lag, max, db_max).boxed()
     }));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
@@ -535,10 +543,16 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
     }
 }
 
-/// Scans for inscriptions and ZRC-20 from the first envelope block, `lag` blocks behind the
+/// Scans for inscriptions from the first envelope block, `lag` blocks behind the
 /// tip. Only transactions with transparent inputs are fetched: nothing else can carry an
 /// envelope or spend an inscription.
-async fn inscriptions(ctx: &Ctx, on: bool, lag: u32, content_max: usize) -> Result<()> {
+async fn inscriptions(
+    ctx: &Ctx,
+    on: bool,
+    lag: u32,
+    content_max: usize,
+    max_db_mb: Option<i64>,
+) -> Result<()> {
     const CHUNK: u32 = 500;
     if !on || zscan_chain::is_testnet() {
         return Ok(());
@@ -556,6 +570,21 @@ async fn inscriptions(ctx: &Ctx, on: bool, lag: u32, content_max: usize) -> Resu
         if next > safe {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
+        }
+        if let Some(max) = max_db_mb {
+            let mb: i64 = zscan_db::sqlx::query_scalar(
+                "SELECT pg_database_size(current_database()) / 1048576",
+            )
+            .fetch_one(&ctx.db.pool)
+            .await?;
+            if mb > max {
+                warn!(
+                    mb,
+                    max, "database above INSCRIPTIONS_MAX_DB_MB, inscription scan paused"
+                );
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                continue;
+            }
         }
         let to = (next + CHUNK - 1).min(safe);
         let t0 = std::time::Instant::now();

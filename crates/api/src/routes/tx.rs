@@ -162,8 +162,6 @@ pub struct TxDetail {
     pub labels: std::collections::BTreeMap<String, super::labels::Tag>,
     /// Inscriptions this transaction created or moved.
     pub inscriptions: Vec<super::inscriptions::TxInscription>,
-    /// ZRC-20 operations in this transaction.
-    pub zrc20: Vec<super::zrc20::ZrcEvent>,
 }
 
 /// Transaction details, decoded from the raw transaction. Works for any mined or mempool tx.
@@ -321,7 +319,6 @@ pub async fn detail(State(s): State<AppState>, Path(txid): Path<String>) -> ApiR
             })
             .collect(),
         inscriptions: super::inscriptions::for_tx(&s, &txid).await?,
-        zrc20: super::zrc20::for_tx(&s, &txid).await?,
         txid,
         labels: Default::default(),
     };

@@ -2,6 +2,7 @@
 
 mod docs;
 mod error;
+mod ipfs;
 mod models;
 mod routes;
 mod ws;
@@ -162,8 +163,9 @@ async fn main() -> Result<()> {
             "/address/{address}/inscriptions",
             get(routes::inscriptions::by_address),
         )
-        .route("/zrc20", get(routes::zrc20::list))
-        .route("/zrc20/{tick}", get(routes::zrc20::detail))
+        .route("/inscriptions/{id}/image", get(routes::inscriptions::image))
+        .route("/collections", get(routes::inscriptions::collections))
+        .route("/collections/{name}", get(routes::inscriptions::collection))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

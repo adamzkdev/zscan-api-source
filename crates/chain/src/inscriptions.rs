@@ -1,4 +1,4 @@
-//! Zcash inscriptions ("Zerdinals" / Zordinals) and the ZRC-20 tokens they carry.
+//! Zcash inscriptions ("Zerdinals" / Zordinals) and the NFT collections built on them.
 //!
 //! The envelope sits in the scriptSig of a transparent input (Zcash has no witness data):
 //! `"ord" <total pieces> <content type>` then up to four `<piece index> <piece>` pairs in
@@ -11,9 +11,11 @@
 //! completes it and moves to the first such output of whatever spends it. With no such output
 //! it ends as `shielded` (the spend has a shielded bundle) or `burned`; both are terminal.
 //!
-//! ZRC-20 follows the rules of the open-source zord indexer: lowercased 4–5 byte tickers, first
-//! deploy wins, a mint may claim up to the per-mint limit and fails past the max supply, and a
-//! transfer inscription commits the amount until its output is spent.
+//! Most inscriptions are fungible-token bookkeeping (ZRC-20 JSON with a `tick`). Those keep
+//! their sequence number but aren't indexed. NFTs come in three forms: content inscribed on
+//! chain (images, SVG, HTML), ZRC-721 collection items (`{"p":"zrc-721","op":"mint",
+//! "collection":"ZGODS","id":"9963"}`, with metadata on IPFS under the collection's deploy),
+//! and IPFS pointers (`{"type":"Zerdinals_NFT","content":"<cid>","mime":"image/png"}`).
 //!
 //! References: Universe Zordinals v1 (github.com/bitcoinuniverseio/docs-zerdinals-and-zrunes)
 //! and zord (github.com/cloutprotocol/zord).
@@ -168,6 +170,103 @@ pub struct Held {
     pub owner: Option<String>,
 }
 
+/// What an inscription's content is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    /// Content on chain; `media` from [`media_kind`].
+    Media(&'static str),
+    /// ZRC-721 collection deploy: `meta` is the IPFS directory holding `<id>.json`.
+    Deploy {
+        collection: String,
+        supply: Option<i64>,
+        meta: Option<String>,
+    },
+    /// ZRC-721 collection item.
+    Item { collection: String, item: String },
+    /// An image or file on IPFS (`Zerdinals_NFT`).
+    Ipfs { cid: String, mime: String },
+    /// Fungible-token bookkeeping (a JSON document with a `tick`): numbered, not indexed.
+    Token,
+}
+
+impl Kind {
+    /// Media family stored for filters and previews.
+    pub fn media(&self) -> &'static str {
+        match self {
+            Kind::Media(m) => m,
+            Kind::Deploy { .. } | Kind::Token => "json",
+            Kind::Item { .. } => "collection",
+            Kind::Ipfs { .. } => "ipfs",
+        }
+    }
+}
+
+fn json_str(v: &serde_json::Value, k: &str) -> Option<String> {
+    match v.get(k)? {
+        serde_json::Value::String(s) => Some(s.trim().to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+    .filter(|s| !s.is_empty() && s.len() <= 128)
+}
+
+/// Classifies inscribed content.
+pub fn classify(content_type: &str, body: &[u8]) -> Kind {
+    let media = media_kind(content_type);
+    let json = std::str::from_utf8(body)
+        .ok()
+        .map(str::trim)
+        .filter(|t| t.starts_with('{') && matches!(media, "json" | "text"))
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+        .filter(|v| v.is_object());
+    let Some(v) = json else {
+        return Kind::Media(media);
+    };
+    let p = json_str(&v, "p").unwrap_or_default().to_ascii_lowercase();
+    if p == "zrc-721" {
+        let collection = json_str(&v, "collection")
+            .or_else(|| json_str(&v, "tick"))
+            .map(|c| c.to_uppercase());
+        match (json_str(&v, "op").as_deref(), collection) {
+            (Some("deploy"), Some(collection)) => {
+                return Kind::Deploy {
+                    collection,
+                    supply: json_str(&v, "supply").and_then(|s| s.parse().ok()),
+                    meta: json_str(&v, "meta").filter(|m| is_cid_path(m)),
+                }
+            }
+            (Some("mint"), Some(collection)) => {
+                if let Some(item) = json_str(&v, "id").filter(|i| i.len() <= 32) {
+                    return Kind::Item { collection, item };
+                }
+            }
+            _ => {}
+        }
+    }
+    if json_str(&v, "type").as_deref() == Some("Zerdinals_NFT")
+        || json_str(&v, "proto").as_deref() == Some("ipfs")
+    {
+        if let Some(cid) = json_str(&v, "content").filter(|c| is_cid_path(c)) {
+            let mime = json_str(&v, "mime").unwrap_or_else(|| "image/png".into());
+            return Kind::Ipfs { cid, mime };
+        }
+    }
+    if v.get("tick").is_some() {
+        return Kind::Token;
+    }
+    Kind::Media(media)
+}
+
+/// An IPFS CID, optionally followed by a path, safe to put in a gateway URL.
+pub fn is_cid_path(s: &str) -> bool {
+    let s = s.strip_prefix("ipfs://").unwrap_or(s);
+    (s.starts_with("Qm") || s.starts_with("baf"))
+        && s.len() <= 200
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'-' | b'_'))
+        && !s.contains("..")
+}
+
 #[derive(Debug, Clone)]
 pub struct Inscription {
     pub id: String,
@@ -185,8 +284,7 @@ pub struct Inscription {
     pub owner: Option<String>,
     pub location: Option<OutPoint>,
     pub state: State,
-    /// ZRC-20 operation named by the body (`deploy`, `mint`, `transfer`), valid or not.
-    pub zrc20: Option<String>,
+    pub kind: Kind,
 }
 
 /// Something that happened to an inscription: `inscribed`, `transfer`, `shielded`, `burned`.
@@ -203,67 +301,29 @@ pub struct Event {
     pub state: State,
 }
 
+/// A ZRC-721 collection, defined by its first deploy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Token {
-    pub tick: String,
-    pub max: u128,
-    pub lim: u128,
-    pub dec: u8,
-    pub minted: u128,
-    pub burned: u128,
-    pub shielded: u128,
-    pub mints: i64,
-    pub deployer: String,
+pub struct Collection {
+    pub name: String,
+    pub supply: Option<i64>,
+    pub meta: Option<String>,
     pub deploy_inscription: String,
-    pub deploy_txid: String,
+    pub deployer: Option<String>,
     pub height: u32,
     pub time: i64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Balance {
-    pub available: u128,
-    /// Committed by transfer inscriptions not yet sent.
-    pub transferable: u128,
-}
-
-/// An inscribed ZRC-20 transfer whose output hasn't been spent yet.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Committed {
-    pub tick: String,
-    pub amount: u128,
-    pub sender: String,
-}
-
-/// A ZRC-20 operation, including the ones that did not count (`valid = false`, with a reason).
-/// `op`: deploy, mint, transfer (inscribed), send, shielded, burn (settled).
-#[derive(Debug, Clone)]
-pub struct ZrcEvent {
-    pub tick: String,
-    pub op: &'static str,
-    pub inscription_id: String,
-    pub txid: String,
-    pub height: u32,
-    pub time: i64,
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub amount: Option<u128>,
-    pub valid: bool,
-    pub reason: Option<String>,
-}
-
-/// Rows to write since the last flush. Keyed sets name entries whose current value is read
-/// from the engine (absent = delete).
+/// Rows to write since the last flush. `pending` names outputs whose current value is read from
+/// the engine (absent = delete).
 #[derive(Debug, Default)]
 pub struct Changes {
     pub inscriptions: Vec<Inscription>,
     pub events: Vec<Event>,
     pub pending: HashSet<OutPoint>,
-    pub tokens: HashSet<String>,
-    pub balances: HashSet<(String, String)>,
-    pub committed: HashSet<String>,
-    pub zrc_events: Vec<ZrcEvent>,
+    pub collections: Vec<Collection>,
     pub failed_chains: u32,
+    /// Token documents numbered but not indexed.
+    pub skipped: u32,
 }
 
 impl Changes {
@@ -271,22 +331,19 @@ impl Changes {
         self.inscriptions.is_empty()
             && self.events.is_empty()
             && self.pending.is_empty()
-            && self.tokens.is_empty()
-            && self.balances.is_empty()
-            && self.committed.is_empty()
-            && self.zrc_events.is_empty()
+            && self.collections.is_empty()
+            && self.skipped == 0
     }
 }
 
-/// Inscription and ZRC-20 state, applied transaction by transaction in chain order.
+/// Inscription state, applied transaction by transaction in chain order.
 #[derive(Debug, Default)]
 pub struct Engine {
     pub next_number: i64,
     pub locations: HashMap<OutPoint, Vec<Held>>,
     pub pending: HashMap<OutPoint, Pending>,
-    pub tokens: HashMap<String, Token>,
-    pub balances: HashMap<(String, String), Balance>,
-    pub committed: HashMap<String, Committed>,
+    /// Deployed collection names.
+    pub collections: HashSet<String>,
     pub out: Changes,
 }
 
@@ -408,6 +465,13 @@ impl Engine {
             .rev()
             .flat_map(|h| hex::decode(h).unwrap_or_default())
             .collect();
+        let number = self.next_number;
+        self.next_number += 1;
+        let kind = classify(&p.content_type, &content);
+        if kind == Kind::Token {
+            self.out.skipped += 1;
+            return;
+        }
         let (state, owner, location) = match successor(c.tx) {
             Some((n, addr)) => (State::Transparent, addr, Some((c.tx.txid.clone(), n))),
             None => (terminal(c.tx), None, None),
@@ -418,10 +482,39 @@ impl Engine {
                 owner: owner.clone(),
             });
         }
-        let zrc = zrc20_body(&p.content_type, &content);
-        let insc = Inscription {
-            id: p.id.clone(),
-            number: self.next_number,
+        if let Kind::Deploy {
+            collection,
+            supply,
+            meta,
+        } = &kind
+        {
+            // The first deploy of a name defines the collection.
+            if self.collections.insert(collection.clone()) {
+                self.out.collections.push(Collection {
+                    name: collection.clone(),
+                    supply: *supply,
+                    meta: meta.clone(),
+                    deploy_inscription: p.id.clone(),
+                    deployer: owner.clone(),
+                    height: c.height,
+                    time: c.time,
+                });
+            }
+        }
+        self.out.events.push(Event {
+            inscription_id: p.id.clone(),
+            kind: "inscribed",
+            txid: c.tx.txid.clone(),
+            height: c.height,
+            time: c.time,
+            from: None,
+            to: owner.clone(),
+            location: location.clone(),
+            state,
+        });
+        self.out.inscriptions.push(Inscription {
+            id: p.id,
+            number,
             genesis_height: p.genesis_height,
             txid: c.tx.txid.clone(),
             height: c.height,
@@ -431,30 +524,11 @@ impl Engine {
             content_type: p.content_type,
             content,
             reveal_txids: p.reveal_txids,
-            owner: owner.clone(),
-            location: location.clone(),
-            state,
-            zrc20: zrc
-                .as_ref()
-                .and_then(|z| z.as_ref().ok())
-                .map(|o| o.op.to_string()),
-        };
-        self.next_number += 1;
-        self.out.events.push(Event {
-            inscription_id: p.id.clone(),
-            kind: "inscribed",
-            txid: c.tx.txid.clone(),
-            height: c.height,
-            time: c.time,
-            from: None,
-            to: owner.clone(),
+            owner,
             location,
             state,
+            kind,
         });
-        self.out.inscriptions.push(insc);
-        if let Some(op) = zrc {
-            self.zrc_inscribe(op, &p.id, owner, c);
-        }
     }
 
     /// Moves inscriptions whose carrying outputs this transaction spends.
@@ -489,7 +563,6 @@ impl Engine {
                     owner: to.clone(),
                 });
             }
-            self.zrc_settle(&h.id, state, to.clone(), c);
             self.out.events.push(Event {
                 inscription_id: h.id,
                 kind,
@@ -502,377 +575,6 @@ impl Engine {
                 state,
             });
         }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// ZRC-20
-
-#[derive(Debug, Deserialize)]
-struct RawOp {
-    p: String,
-    op: String,
-    tick: String,
-    #[serde(default)]
-    max: Option<String>,
-    #[serde(default)]
-    lim: Option<String>,
-    #[serde(default)]
-    amt: Option<String>,
-    #[serde(default)]
-    dec: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ZrcOp {
-    pub op: &'static str,
-    /// Lowercased.
-    pub tick: String,
-    pub max: Option<String>,
-    pub lim: Option<String>,
-    pub amt: Option<String>,
-    pub dec: Option<String>,
-}
-
-/// A body that reads as a ZRC-20 document: `None` if it isn't one, `Some(Err)` with the reason
-/// if it names `zrc-20` but breaks the rules.
-pub fn zrc20_body(content_type: &str, body: &[u8]) -> Option<Result<ZrcOp, String>> {
-    let ct = content_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let text = std::str::from_utf8(body).ok()?.trim();
-    let json_like = ct == "application/json"
-        || ct.ends_with("+json")
-        || (ct.starts_with("text/") && text.starts_with('{'));
-    if !json_like || !text.to_ascii_lowercase().contains("zrc-20") {
-        return None;
-    }
-    let raw: RawOp = match serde_json::from_str(text) {
-        Ok(r) => r,
-        Err(_) => {
-            // Only report malformed documents that clearly meant to be ZRC-20.
-            let v: serde_json::Value = serde_json::from_str(text).ok()?;
-            let p = v.get("p")?.as_str()?;
-            return (p.eq_ignore_ascii_case("zrc-20"))
-                .then(|| Err("fields must be strings".to_string()));
-        }
-    };
-    if !raw.p.eq_ignore_ascii_case("zrc-20") {
-        return None;
-    }
-    Some(validate(raw))
-}
-
-fn validate(raw: RawOp) -> Result<ZrcOp, String> {
-    let op = match raw.op.as_str() {
-        "deploy" => "deploy",
-        "mint" => "mint",
-        "transfer" => "transfer",
-        _ => return Err(format!("unknown op {:?}", truncate(&raw.op, 16))),
-    };
-    let tick = raw.tick.to_lowercase();
-    if !(4..=5).contains(&tick.len()) {
-        return Err("ticker must be 4-5 bytes".into());
-    }
-    for v in [&raw.max, &raw.lim, &raw.amt].into_iter().flatten() {
-        check_number(v, raw.dec.as_deref())?;
-    }
-    if let Some(d) = &raw.dec {
-        if d.is_empty()
-            || !d.bytes().all(|b| b.is_ascii_digit())
-            || d.parse::<u8>().map_or(true, |d| d > 18)
-        {
-            return Err("dec must be 0-18".into());
-        }
-    }
-    Ok(ZrcOp {
-        op,
-        tick,
-        max: raw.max,
-        lim: raw.lim,
-        amt: raw.amt,
-        dec: raw.dec,
-    })
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
-/// zord's numeric-string rules: digits with at most one inner dot, not `0`, no more decimals
-/// than declared (18 by default), and below 2^64 with the dot removed.
-fn check_number(v: &str, dec: Option<&str>) -> Result<(), String> {
-    let bad = |m: &str| Err(format!("{m}: {:?}", truncate(v, 24)));
-    if v.is_empty() || v == "0" {
-        return bad("amount must be positive");
-    }
-    if v.matches('.').count() > 1 || v.starts_with('.') || v.ends_with('.') {
-        return bad("malformed number");
-    }
-    if !v.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
-        return bad("malformed number");
-    }
-    if let Some(dot) = v.find('.') {
-        let max = dec.and_then(|d| d.parse::<usize>().ok()).unwrap_or(18);
-        if v.len() - dot - 1 > max {
-            return bad("too many decimals");
-        }
-    }
-    if v.replace('.', "").parse::<u64>().is_err() {
-        return bad("number too large");
-    }
-    Ok(())
-}
-
-/// A decimal string scaled to `dec` decimals.
-pub fn scale_amount(v: &str, dec: u8) -> Option<u128> {
-    let (whole, frac) = v.split_once('.').unwrap_or((v, ""));
-    if frac.len() > dec as usize {
-        return None;
-    }
-    let whole: u128 = if whole.is_empty() {
-        0
-    } else {
-        whole.parse().ok()?
-    };
-    let frac: u128 = if frac.is_empty() {
-        0
-    } else {
-        format!("{frac:0<width$}", width = dec as usize)
-            .parse()
-            .ok()?
-    };
-    whole.checked_mul(10u128.pow(dec as u32))?.checked_add(frac)
-}
-
-/// Formats a scaled amount as a decimal string, without trailing zeros.
-pub fn format_amount(v: u128, dec: u8) -> String {
-    if dec == 0 {
-        return v.to_string();
-    }
-    let s = format!("{v:0>width$}", width = dec as usize + 1);
-    let (whole, frac) = s.split_at(s.len() - dec as usize);
-    let frac = frac.trim_end_matches('0');
-    if frac.is_empty() {
-        whole.to_string()
-    } else {
-        format!("{whole}.{frac}")
-    }
-}
-
-/// What a ZRC-20 operation did: parties, amount, or why it did not count.
-#[derive(Default)]
-struct Effect {
-    from: Option<String>,
-    to: Option<String>,
-    amount: Option<u128>,
-    reason: Option<String>,
-}
-
-impl Engine {
-    fn zrc_event(&mut self, tick: &str, op: &'static str, id: &str, c: &Ctx, e: Effect) {
-        self.out.zrc_events.push(ZrcEvent {
-            tick: truncate(tick, 32),
-            op,
-            inscription_id: id.to_string(),
-            txid: c.tx.txid.clone(),
-            height: c.height,
-            time: c.time,
-            from: e.from,
-            to: e.to,
-            amount: e.amount,
-            valid: e.reason.is_none(),
-            reason: e.reason,
-        });
-    }
-
-    fn balance(&mut self, tick: &str, addr: &str) -> &mut Balance {
-        let key = (tick.to_string(), addr.to_string());
-        self.out.balances.insert(key.clone());
-        self.balances.entry(key).or_default()
-    }
-
-    fn zrc_inscribe(
-        &mut self,
-        op: Result<ZrcOp, String>,
-        id: &str,
-        owner: Option<String>,
-        c: &Ctx,
-    ) {
-        let op = match op {
-            Ok(op) => op,
-            Err(reason) => {
-                let e = Effect {
-                    to: owner,
-                    reason: Some(reason),
-                    ..Default::default()
-                };
-                self.zrc_event("", "invalid", id, c, e);
-                return;
-            }
-        };
-        let Some(owner) = owner else {
-            let e = Effect {
-                reason: Some("inscription has no transparent owner".into()),
-                ..Default::default()
-            };
-            self.zrc_event(&op.tick, op.op, id, c, e);
-            return;
-        };
-        let result = match op.op {
-            "deploy" => self.zrc_deploy(&op, id, &owner, c),
-            "mint" => self.zrc_mint(&op, &owner),
-            _ => self.zrc_commit(&op, id, &owner),
-        };
-        let e = match result {
-            Ok(amount) if op.op == "mint" => Effect {
-                to: Some(owner),
-                amount,
-                ..Default::default()
-            },
-            Ok(amount) => Effect {
-                from: Some(owner),
-                amount,
-                ..Default::default()
-            },
-            Err(reason) => Effect {
-                from: Some(owner),
-                reason: Some(reason),
-                ..Default::default()
-            },
-        };
-        self.zrc_event(&op.tick, op.op, id, c, e);
-    }
-
-    fn zrc_deploy(
-        &mut self,
-        op: &ZrcOp,
-        id: &str,
-        owner: &str,
-        c: &Ctx,
-    ) -> Result<Option<u128>, String> {
-        if self.tokens.contains_key(&op.tick) {
-            return Err("ticker already deployed".into());
-        }
-        let dec: u8 = op.dec.as_deref().map_or(18, |d| d.parse().unwrap_or(18));
-        let max_s = op.max.as_deref().ok_or("deploy without max")?;
-        let max = scale_amount(max_s, dec).ok_or("max has too many decimals")?;
-        let lim = match op.lim.as_deref() {
-            Some(l) => scale_amount(l, dec).ok_or("lim has too many decimals")?,
-            None => max,
-        };
-        self.out.tokens.insert(op.tick.clone());
-        self.tokens.insert(
-            op.tick.clone(),
-            Token {
-                tick: op.tick.clone(),
-                max,
-                lim,
-                dec,
-                minted: 0,
-                burned: 0,
-                shielded: 0,
-                mints: 0,
-                deployer: owner.to_string(),
-                deploy_inscription: id.to_string(),
-                deploy_txid: c.tx.txid.clone(),
-                height: c.height,
-                time: c.time,
-            },
-        );
-        Ok(None)
-    }
-
-    fn zrc_amount(&self, op: &ZrcOp) -> Result<(u128, Token), String> {
-        let t = self
-            .tokens
-            .get(&op.tick)
-            .ok_or("ticker not deployed")?
-            .clone();
-        let amt = op.amt.as_deref().ok_or("missing amt")?;
-        let amt = scale_amount(amt, t.dec).ok_or("amt has too many decimals")?;
-        Ok((amt, t))
-    }
-
-    fn zrc_mint(&mut self, op: &ZrcOp, owner: &str) -> Result<Option<u128>, String> {
-        let (amt, t) = self.zrc_amount(op)?;
-        if amt > t.lim {
-            return Err("amount above the mint limit".into());
-        }
-        if t.minted + amt > t.max {
-            return Err("max supply reached".into());
-        }
-        let tok = self.tokens.get_mut(&op.tick).expect("checked");
-        tok.minted += amt;
-        tok.mints += 1;
-        self.out.tokens.insert(op.tick.clone());
-        self.balance(&op.tick, owner).available += amt;
-        Ok(Some(amt))
-    }
-
-    fn zrc_commit(&mut self, op: &ZrcOp, id: &str, owner: &str) -> Result<Option<u128>, String> {
-        let (amt, _) = self.zrc_amount(op)?;
-        let b = self
-            .balances
-            .get(&(op.tick.clone(), owner.to_string()))
-            .copied()
-            .unwrap_or_default();
-        if b.available < amt {
-            return Err("insufficient available balance".into());
-        }
-        let b = self.balance(&op.tick, owner);
-        b.available -= amt;
-        b.transferable += amt;
-        self.out.committed.insert(id.to_string());
-        self.committed.insert(
-            id.to_string(),
-            Committed {
-                tick: op.tick.clone(),
-                amount: amt,
-                sender: owner.to_string(),
-            },
-        );
-        Ok(Some(amt))
-    }
-
-    /// Delivers a committed transfer when its inscription's output is first spent.
-    fn zrc_settle(&mut self, id: &str, state: State, to: Option<String>, c: &Ctx) {
-        let Some(t) = self.committed.remove(id) else {
-            return;
-        };
-        self.out.committed.insert(id.to_string());
-        let b = self.balance(&t.tick, &t.sender);
-        b.transferable = b.transferable.saturating_sub(t.amount);
-        let op = match (state, &to) {
-            (State::Transparent, Some(r)) => {
-                self.balance(&t.tick, r).available += t.amount;
-                "send"
-            }
-            (State::Shielded, _) => {
-                if let Some(tok) = self.tokens.get_mut(&t.tick) {
-                    tok.shielded += t.amount;
-                }
-                "shielded"
-            }
-            // Burned, or a transparent output without an address.
-            _ => {
-                if let Some(tok) = self.tokens.get_mut(&t.tick) {
-                    tok.burned += t.amount;
-                }
-                "burn"
-            }
-        };
-        self.out.tokens.insert(t.tick.clone());
-        let e = Effect {
-            from: Some(t.sender),
-            to,
-            amount: Some(t.amount),
-            reason: None,
-        };
-        self.zrc_event(&t.tick, op, id, c, e);
     }
 }
 
@@ -908,8 +610,9 @@ mod tests {
 
     const TEXT: &str = include_str!("../testdata/inscription_text_3132356.hex");
     const PNG_CHAIN: &str = include_str!("../testdata/inscription_png_chain_3495676.hex");
-    const DEPLOY: &str = include_str!("../testdata/zrc20_deploy_3133112.hex");
-    const MINT: &str = include_str!("../testdata/zrc20_mint_3133115.hex");
+    const ZRC20_DEPLOY: &str = include_str!("../testdata/zrc20_deploy_3133112.hex");
+    const ZGODS_MINT: &str = include_str!("../testdata/zrc721_mint_zgods.hex");
+    const IPFS_NFT: &str = include_str!("../testdata/ipfs_nft.hex");
 
     #[test]
     fn parses_first_inscription() {
@@ -936,6 +639,7 @@ mod tests {
             Some("t1Yidqtcf4FeDzbZi4EBZkn84HyS9sypqWU")
         );
         assert_eq!(i.state, State::Transparent);
+        assert_eq!(i.kind, Kind::Media("text"));
         assert!(e.pending.is_empty());
     }
 
@@ -972,25 +676,79 @@ mod tests {
             i.owner.as_deref(),
             Some("t1Jxr49mdm5nKwWUuSKNNTofyqn7WiFMnLi")
         );
+        assert_eq!(i.kind, Kind::Media("image"));
         assert!(e.pending.is_empty());
     }
 
     #[test]
-    fn deploys_and_mints_zrc20() {
+    fn token_documents_are_numbered_not_indexed() {
         let mut e = Engine::new();
-        e.apply_tx(3_133_112, 0, 1, &tx(DEPLOY));
-        e.apply_tx(3_133_115, 0, 1, &tx(MINT));
-        let t = &e.tokens["zero"];
-        assert_eq!(t.max, 21_000_000 * 10u128.pow(18));
-        assert_eq!(t.lim, 1_000 * 10u128.pow(18));
-        assert_eq!(t.minted, 1_000 * 10u128.pow(18));
-        let minter = e.out.inscriptions[1].owner.clone().unwrap();
+        e.apply_tx(3_133_112, 0, 1, &tx(ZRC20_DEPLOY));
+        assert!(e.out.inscriptions.is_empty() && e.locations.is_empty());
+        assert_eq!((e.out.skipped, e.next_number), (1, 2));
+    }
+
+    #[test]
+    fn classifies_collection_items_and_ipfs_nfts() {
+        let mut e = Engine::new();
+        e.apply_tx(3_143_217, 0, 1, &tx(ZGODS_MINT));
+        e.apply_tx(3_136_751, 0, 1, &tx(IPFS_NFT));
+        let [z, n] = &e.out.inscriptions[..] else {
+            panic!("expected two inscriptions");
+        };
         assert_eq!(
-            e.balances[&("zero".to_string(), minter)].available,
-            1_000 * 10u128.pow(18)
+            z.kind,
+            Kind::Item {
+                collection: "ZGODS".into(),
+                item: "9963".into()
+            }
         );
-        assert!(e.out.zrc_events.iter().all(|z| z.valid));
-        assert_eq!(e.out.inscriptions[1].zrc20.as_deref(), Some("mint"));
+        assert_eq!(
+            z.owner.as_deref(),
+            Some("t1Sg7TeEA9TKjYMwsfFeQ3AqyCZDvPKnsny")
+        );
+        assert_eq!(
+            n.kind,
+            Kind::Ipfs {
+                cid: "QmQgsPXMM5sZ5b3rxmQkASdz2sfPxp33gkYEkDFTG3TxZU".into(),
+                mime: "image/png".into()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_rules() {
+        let j = |s: &str| classify("application/json", s.as_bytes());
+        assert_eq!(
+            j(
+                r#"{"p":"zrc-721","op":"deploy","collection":"zgods","supply":"10000","meta":"bafybeicq"}"#
+            ),
+            Kind::Deploy {
+                collection: "ZGODS".into(),
+                supply: Some(10000),
+                meta: Some("bafybeicq".into())
+            }
+        );
+        assert_eq!(
+            j(r#"{"p":"zrc-20","op":"mint","tick":"ZERO","amt":"1000"}"#),
+            Kind::Token
+        );
+        assert_eq!(
+            classify(
+                "text/plain",
+                br#"{"amt":1000,"tick":"ZINC","type":"zrc20_mint"}"#
+            ),
+            Kind::Token
+        );
+        assert_eq!(j(r#"{"r":1}"#), Kind::Media("json"));
+        assert_eq!(classify("text/plain", b"hello"), Kind::Media("text"));
+        // A pointer must be a CID, never a URL or a path escape.
+        assert_eq!(
+            j(r#"{"type":"Zerdinals_NFT","content":"https://evil.example/x.png"}"#),
+            Kind::Media("json")
+        );
+        assert!(!is_cid_path("Qm../../etc"));
+        assert!(is_cid_path("bafybeiaq/9963.png"));
     }
 
     /// A synthetic transaction with the given scriptSigs and output addresses.
@@ -1122,92 +880,22 @@ mod tests {
     }
 
     #[test]
-    fn zrc20_transfer_commits_then_sends() {
+    fn first_deploy_defines_the_collection() {
         let j = |s: &str| envelope("application/json", s.as_bytes());
+        let d =
+            r#"{"p":"zrc-721","op":"deploy","collection":"CATS","supply":"3","meta":"bafyone"}"#;
+        let d2 =
+            r#"{"p":"zrc-721","op":"deploy","collection":"cats","supply":"9","meta":"bafytwo"}"#;
         let mut e = Engine::new();
-        let deploy =
-            r#"{"p":"zrc-20","op":"deploy","tick":"TEST","max":"100","lim":"10","dec":"0"}"#;
-        e.apply_tx(
-            1,
-            0,
-            1,
-            &synth("d0", &[("00", 0, j(deploy))], &[Some("t1dep")]),
-        );
-        let mint = r#"{"p":"zrc-20","op":"mint","tick":"test","amt":"10"}"#;
-        e.apply_tx(2, 0, 1, &synth("m0", &[("00", 1, j(mint))], &[Some("t1a")]));
-        let over = r#"{"p":"zrc-20","op":"mint","tick":"test","amt":"11"}"#;
-        e.apply_tx(2, 0, 2, &synth("m1", &[("00", 2, j(over))], &[Some("t1a")]));
-        let xfer = r#"{"p":"zrc-20","op":"transfer","tick":"test","amt":"4"}"#;
-        e.apply_tx(3, 0, 1, &synth("x0", &[("00", 3, j(xfer))], &[Some("t1a")]));
-        let bal = |e: &Engine, a: &str| e.balances[&("test".to_string(), a.to_string())];
+        e.apply_tx(1, 0, 1, &synth("d1", &[("00", 0, j(d))], &[Some("t1a")]));
+        e.apply_tx(2, 0, 1, &synth("d2", &[("00", 1, j(d2))], &[Some("t1b")]));
+        assert_eq!(e.out.collections.len(), 1);
+        let c = &e.out.collections[0];
         assert_eq!(
-            bal(&e, "t1a"),
-            Balance {
-                available: 6,
-                transferable: 4
-            }
+            (c.name.as_str(), c.meta.as_deref()),
+            ("CATS", Some("bafyone"))
         );
-        // Spend the transfer inscription to t1b.
-        e.apply_tx(4, 0, 1, &synth("s0", &[("x0", 0, sig())], &[Some("t1b")]));
-        assert_eq!(
-            bal(&e, "t1a"),
-            Balance {
-                available: 6,
-                transferable: 0
-            }
-        );
-        assert_eq!(
-            bal(&e, "t1b"),
-            Balance {
-                available: 4,
-                transferable: 0
-            }
-        );
-        // Moving it again does nothing to balances.
-        e.apply_tx(5, 0, 1, &synth("s1", &[("s0", 0, sig())], &[Some("t1c")]));
-        assert!(!e
-            .balances
-            .contains_key(&("test".to_string(), "t1c".to_string())));
-        let t = &e.tokens["test"];
-        assert_eq!((t.minted, t.mints), (10, 1));
-        let ops: Vec<_> = e.out.zrc_events.iter().map(|z| (z.op, z.valid)).collect();
-        assert_eq!(
-            ops,
-            [
-                ("deploy", true),
-                ("mint", true),
-                ("mint", false),
-                ("transfer", true),
-                ("send", true)
-            ]
-        );
-    }
-
-    #[test]
-    fn zrc20_rules() {
-        let body = |s: &str| zrc20_body("text/plain", s.as_bytes());
-        assert!(body("hello zrc-20").is_none());
-        assert!(body(r#"{"p":"brc-20","op":"mint","tick":"ordi","amt":"1"}"#).is_none());
-        assert!(body(r#"{"p":"zrc-20","op":"mint","tick":"abc","amt":"1"}"#)
-            .unwrap()
-            .is_err());
-        assert!(
-            body(r#"{"p":"zrc-20","op":"mint","tick":"abcd","amt":"0"}"#)
-                .unwrap()
-                .is_err()
-        );
-        assert!(body(r#"{"p":"zrc-20","op":"mint","tick":"abcd","amt":1}"#)
-            .unwrap()
-            .is_err());
-        let ok = body(r#"{"p":"ZRC-20","op":"mint","tick":"ABCD","amt":"1.5"}"#)
-            .unwrap()
-            .unwrap();
-        assert_eq!(ok.tick, "abcd");
-        assert_eq!(scale_amount("1.5", 18), Some(15 * 10u128.pow(17)));
-        assert_eq!(scale_amount("1.5", 0), None);
-        assert_eq!(format_amount(15 * 10u128.pow(17), 18), "1.5");
-        assert_eq!(format_amount(21_000_000 * 10u128.pow(18), 18), "21000000");
-        assert_eq!(format_amount(5, 2), "0.05");
+        assert_eq!(e.out.inscriptions.len(), 2);
     }
 
     #[test]
