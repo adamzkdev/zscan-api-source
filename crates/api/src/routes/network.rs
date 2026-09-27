@@ -18,13 +18,16 @@ pub struct Status {
     pub target_low: u32,
     /// Backfill progress, 0–1.
     pub backfill_progress: f64,
+    /// Lowest height whose transactions are stored, when older ones are pruned
+    /// (TX_RETENTION_DAYS); blocks below it keep their header-level data.
+    pub transactions_from: Option<i32>,
 }
 
 /// Indexer status.
 #[utoipa::path(get, path = "/v1/status", responses((status = 200, body = Status)), tag = "network")]
 pub async fn status(State(s): State<AppState>) -> ApiResult<Status> {
-    let (low, high, target): (Option<i32>, Option<i32>, Option<i32>) =
-        sqlx::query_as("SELECT low, high, target FROM sync_state")
+    let (low, high, target, tx_low): (Option<i32>, Option<i32>, Option<i32>, Option<i32>) =
+        sqlx::query_as("SELECT low, high, target, tx_low FROM sync_state")
             .fetch_one(&s.db.pool)
             .await?;
     let target = target.unwrap_or(nu6_3_height() as i32);
@@ -45,6 +48,7 @@ pub async fn status(State(s): State<AppState>) -> ApiResult<Status> {
         indexed_low: low,
         target_low: target as u32,
         backfill_progress: progress,
+        transactions_from: tx_low.max(low),
     }))
 }
 

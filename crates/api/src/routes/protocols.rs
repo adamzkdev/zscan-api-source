@@ -405,9 +405,10 @@ pub async fn detail(
     };
     let mut summary = summarize(&p, current, &daily, addresses.len() as i64);
     summary.stats = stats(&s).await?.remove(&slug);
-    let indexed_from: Option<i32> = sqlx::query_scalar("SELECT low FROM sync_state")
-        .fetch_one(&s.db.pool)
-        .await?;
+    let indexed_from: Option<i32> =
+        sqlx::query_scalar("SELECT GREATEST(low, tx_low) FROM sync_state")
+            .fetch_one(&s.db.pool)
+            .await?;
     Ok(Json(ProtocolDetail {
         protocol: summary,
         daily,

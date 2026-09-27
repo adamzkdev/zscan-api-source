@@ -183,9 +183,10 @@ pub async fn detail(
         })
     });
 
-    let indexed_from: Option<i32> = sqlx::query_scalar("SELECT low FROM sync_state")
-        .fetch_one(&s.db.pool)
-        .await?;
+    let indexed_from: Option<i32> =
+        sqlx::query_scalar("SELECT GREATEST(low, tx_low) FROM sync_state")
+            .fetch_one(&s.db.pool)
+            .await?;
 
     Ok(Json(AddressDetail {
         address,

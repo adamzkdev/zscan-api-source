@@ -191,9 +191,10 @@ async fn refresh_once(s: &AppState) -> anyhow::Result<()> {
             .fetch_optional(&s.db.pool)
             .await?
             .unwrap_or(0);
-    let indexed_from: Option<i32> = sqlx::query_scalar("SELECT low FROM sync_state")
-        .fetch_one(&s.db.pool)
-        .await?;
+    let indexed_from: Option<i32> =
+        sqlx::query_scalar("SELECT GREATEST(low, tx_low) FROM sync_state")
+            .fetch_one(&s.db.pool)
+            .await?;
 
     let tags = super::labels::lookup(
         &s.db,

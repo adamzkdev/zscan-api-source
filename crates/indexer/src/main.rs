@@ -30,6 +30,8 @@ struct Config {
     start_height: String,
     backfill_chunk: u32,
     backfill_concurrency: usize,
+    /// Keep transactions for this many days only (blocks are always kept). Unset keeps all.
+    tx_retention_days: Option<u32>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -47,6 +49,10 @@ impl Config {
             start_height: env_or("START_HEIGHT", &nu6_3_height().to_string()),
             backfill_chunk: env_or("BACKFILL_CHUNK", "200").parse()?,
             backfill_concurrency: env_or("BACKFILL_CONCURRENCY", "4").parse()?,
+            tx_retention_days: match std::env::var("TX_RETENTION_DAYS") {
+                Ok(v) if !v.trim().is_empty() => Some(v.trim().parse()?),
+                _ => None,
+            },
         })
     }
 }
@@ -105,9 +111,14 @@ async fn main() -> Result<()> {
     let audit = tokio::spawn(supervise("audit", move || audit(ctx).boxed()));
     let daily = tokio::spawn(supervise("daily", move || daily(ctx).boxed()));
     let labels = tokio::spawn(supervise("labels", move || labels(ctx).boxed()));
+    let retention = tokio::spawn(supervise("retention", {
+        let days = cfg.tx_retention_days;
+        move || retention(ctx, days).boxed()
+    }));
 
-    let _ =
-        tokio::join!(follow, backfill, snapshots, mempool, retag, economics, audit, daily, labels);
+    let _ = tokio::join!(
+        follow, backfill, snapshots, mempool, retag, economics, audit, daily, labels, retention
+    );
     Ok(())
 }
 
@@ -203,6 +214,21 @@ async fn backfill(ctx: &Ctx, start: u32, chunk: u32, concurrency: usize) -> Resu
             remaining = from - start,
             "backfilled chunk"
         );
+    }
+}
+
+/// Deletes transactions older than the retention window, every 10 minutes. Small disks (the
+/// hosted demo has 500 MB) can then follow the tip indefinitely.
+async fn retention(ctx: &Ctx, days: Option<u32>) -> Result<()> {
+    let Some(days) = days else {
+        return Ok(());
+    };
+    loop {
+        let (low, deleted) = ctx.db.prune_transactions(days).await?;
+        if deleted > 0 {
+            info!(days, tx_low = low, deleted, "pruned old transactions");
+        }
+        tokio::time::sleep(Duration::from_secs(600)).await;
     }
 }
 

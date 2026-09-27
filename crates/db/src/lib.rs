@@ -245,6 +245,41 @@ impl Db {
         Ok(())
     }
 
+    /// Deletes transactions (their inputs and outputs cascade) mined before `keep_days` ago,
+    /// in small batches so each commit only writes a little WAL. Blocks are kept. Returns the
+    /// new lowest height with transactions and the number of transactions deleted.
+    pub async fn prune_transactions(&self, keep_days: u32) -> Result<(Option<i32>, u64)> {
+        let cutoff: Option<i32> = sqlx::query_scalar(
+            "SELECT min(height) FROM blocks WHERE time >= now() - make_interval(days => $1)",
+        )
+        .bind(keep_days as i32)
+        .fetch_one(&self.pool)
+        .await?;
+        let Some(cutoff) = cutoff else {
+            return Ok((None, 0));
+        };
+        let mut deleted = 0;
+        loop {
+            let n = sqlx::query(
+                "DELETE FROM transactions WHERE txid IN
+                   (SELECT txid FROM transactions WHERE height < $1 LIMIT 2000)",
+            )
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+            deleted += n;
+            if n == 0 {
+                break;
+            }
+        }
+        sqlx::query("UPDATE sync_state SET tx_low = GREATEST($1, low)")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?;
+        Ok((Some(cutoff), deleted))
+    }
+
     /// Blocks indexed before miner tagging existed: (height, coinbase txid).
     pub async fn untagged_blocks(&self, limit: i64) -> Result<Vec<(i32, String)>> {
         Ok(sqlx::query_as(
