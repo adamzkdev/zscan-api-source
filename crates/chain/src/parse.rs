@@ -157,6 +157,66 @@ pub fn parse_tx(raw: &[u8]) -> Result<ParsedTx> {
     })
 }
 
+/// Full note ciphertexts of a transaction's shielded outputs, for wallets and viewing-key tools
+/// that decrypt memos or recover outgoing notes (compact blocks only carry 52 bytes).
+#[derive(Debug, Clone, Serialize)]
+pub struct ShieldedOutput {
+    /// Nullifier of the spent note (Orchard/Ironwood actions only), hex.
+    pub nullifier: Option<String>,
+    /// Note commitment (`cmu` for Sapling, `cmx` for Orchard/Ironwood), hex.
+    pub cm: String,
+    /// Value commitment (`cv` / `cv_net`), hex.
+    pub cv: String,
+    pub epk: String,
+    /// 580 bytes, hex.
+    pub enc_ciphertext: String,
+    /// 80 bytes, hex.
+    pub out_ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ShieldedOutputs {
+    pub sapling: Vec<ShieldedOutput>,
+    pub orchard: Vec<ShieldedOutput>,
+    pub ironwood: Vec<ShieldedOutput>,
+}
+
+pub fn shielded_outputs(raw: &[u8]) -> Result<ShieldedOutputs> {
+    let tx: Transaction = raw.zcash_deserialize_into().context("decode transaction")?;
+    macro_rules! actions {
+        ($iter:expr) => {
+            $iter
+                .map(|a| {
+                    let n = a.encrypted_note();
+                    ShieldedOutput {
+                        nullifier: Some(hex::encode(a.nullifier().to_bytes())),
+                        cm: hex::encode(a.cmx().to_bytes()),
+                        cv: hex::encode(a.cv_net().to_bytes()),
+                        epk: hex::encode(n.epk_bytes),
+                        enc_ciphertext: hex::encode(n.enc_ciphertext),
+                        out_ciphertext: hex::encode(n.out_ciphertext),
+                    }
+                })
+                .collect()
+        };
+    }
+    Ok(ShieldedOutputs {
+        sapling: tx
+            .sapling_outputs()
+            .map(|o| ShieldedOutput {
+                nullifier: None,
+                cm: hex::encode(o.cmu().to_bytes()),
+                cv: hex::encode(o.cv().to_bytes()),
+                epk: hex::encode(o.ephemeral_key().0),
+                enc_ciphertext: hex::encode(o.enc_ciphertext()),
+                out_ciphertext: hex::encode(o.out_ciphertext()),
+            })
+            .collect(),
+        orchard: actions!(tx.orchard_actions()),
+        ironwood: actions!(tx.ironwood_actions()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

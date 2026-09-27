@@ -11,8 +11,8 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, fees, labels, network, pools, price, protocols, rankings, search, status,
-    supply, tx, upgrades,
+    address, blocks, compact, fees, labels, network, pools, price, protocols, rankings, search,
+    status, supply, tx, upgrades,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -107,6 +107,7 @@ protocol makes public."#;
         supply::supply, supply::audit, supply::funding, supply::anonymity,
         network::mempool, network::network, network::daily, fees::fees,
         rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
+        compact::range, compact::tx_outputs,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
@@ -120,6 +121,7 @@ protocol makes public."#;
         (name = "search", description = "Resolve any height, hash, txid or address."),
         (name = "protocols", description = "Holdings and flows of protocols and entities touching ZEC: shielded pools, treasuries, bridges, mining pools, exchanges."),
         (name = "labels", description = "Address name tags, each with a verifiable source."),
+        (name = "shielded", description = "Compact blocks and full note ciphertexts for client-side scanning with a viewing key. Keys never reach the server."),
     )
 )]
 struct ApiDoc;

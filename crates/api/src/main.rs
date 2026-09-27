@@ -124,6 +124,8 @@ async fn main() -> Result<()> {
         .route("/txs", get(routes::tx::list))
         .route("/tx/{txid}", get(routes::tx::detail))
         .route("/tx/broadcast", post(routes::tx::broadcast))
+        .route("/tx/{txid}/shielded", get(routes::compact::tx_outputs))
+        .route("/compact", get(routes::compact::range))
         .route("/address/{address}", get(routes::address::detail))
         .route("/search", get(routes::search::search))
         .route("/pools", get(routes::pools::current))
