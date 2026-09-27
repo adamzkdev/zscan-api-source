@@ -1,5 +1,6 @@
 //! Chain access for ZScan: lightwalletd gRPC, zebrad JSON-RPC, and transaction decoding.
 
+pub mod bridges;
 pub mod classify;
 pub mod consts;
 pub mod economics;

@@ -28,6 +28,8 @@ enum Source {
     Lockbox,
     /// Labeled transparent addresses with this protocol slug.
     Addresses,
+    /// Daily holdings reported by the bridge itself (`bridge_snapshots`), e.g. ZEC minted on NEAR.
+    Snapshots,
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +113,7 @@ async fn all_protocols(s: &AppState) -> anyhow::Result<Vec<Proto>> {
                 "sapling" => Source::Pool("sapling"),
                 "sprout" => Source::Pool("sprout"),
                 "lockbox" => Source::Lockbox,
+                "near-intents" => Source::Snapshots,
                 _ => Source::Addresses,
             },
             slug: p.slug.clone(),
@@ -211,6 +214,25 @@ async fn series(
                 current,
             )
         }
+        Source::Snapshots => {
+            let current: Option<i64> = sqlx::query_scalar(
+                "SELECT amount FROM bridge_snapshots WHERE protocol = $1 ORDER BY day DESC LIMIT 1",
+            )
+            .bind(&p.slug)
+            .fetch_optional(&s.db.pool)
+            .await?;
+            (
+                // Day-over-day change of the reported holdings.
+                "SELECT (day::timestamp AT TIME ZONE 'UTC') AS day,
+                        GREATEST(amount - prev, 0)::bigint AS inflow,
+                        GREATEST(prev - amount, 0)::bigint AS outflow
+                 FROM (SELECT day, amount, lag(amount) OVER (ORDER BY day) AS prev
+                       FROM bridge_snapshots WHERE protocol = $2) x
+                 WHERE prev IS NOT NULL"
+                    .to_string(),
+                current,
+            )
+        }
     };
     let sql = format!(
         "WITH {DAYS}, f AS ({flows})
@@ -218,7 +240,7 @@ async fn series(
          FROM days d LEFT JOIN f USING (day) ORDER BY d.day"
     );
     let mut q = sqlx::query_as::<_, (DateTime<Utc>, i64, i64)>(&sql).bind(days);
-    if matches!(p.source, Source::Addresses) {
+    if matches!(p.source, Source::Addresses | Source::Snapshots) {
         q = q.bind(&p.slug);
     }
     let rows = q.fetch_all(&s.db.pool).await?;

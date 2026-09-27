@@ -490,6 +490,76 @@ impl Db {
         Ok(())
     }
 
+    /// Inserts cross-chain events, or refreshes the ones already known (a pending swap gets
+    /// its status and Zcash transaction once it completes).
+    pub async fn upsert_bridge_events(
+        &self,
+        events: &[zscan_chain::bridges::BridgeEvent],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for e in events {
+            sqlx::query(
+                "INSERT INTO bridge_events (protocol, external_id, direction, amount, counter_asset,
+                    counter_chain, usd, zcash_txid, external_url, status, time)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11))
+                 ON CONFLICT (protocol, external_id) DO UPDATE SET
+                    direction = $3, amount = $4, usd = COALESCE($7, bridge_events.usd),
+                    zcash_txid = COALESCE($8, bridge_events.zcash_txid), status = $10",
+            )
+            .bind(e.protocol)
+            .bind(&e.external_id)
+            .bind(e.direction)
+            .bind(e.amount)
+            .bind(&e.counter_asset)
+            .bind(&e.counter_chain)
+            .bind(e.usd)
+            .bind(&e.zcash_txid)
+            .bind(&e.external_url)
+            .bind(&e.status)
+            .bind(e.time as f64)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Whether this protocol event is already stored (paging stops at known events).
+    pub async fn has_bridge_event(&self, protocol: &str, external_id: &str) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM bridge_events WHERE protocol = $1 AND external_id = $2)",
+        )
+        .bind(protocol)
+        .bind(external_id)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
+    /// Today's (UTC) holdings of a bridge; the latest value of the day wins.
+    pub async fn set_bridge_snapshot(&self, protocol: &str, amount: i64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO bridge_snapshots (protocol, day, amount)
+             VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $2)
+             ON CONFLICT (protocol, day) DO UPDATE SET amount = $2, updated_at = now()",
+        )
+        .bind(protocol)
+        .bind(amount)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drops cross-chain events older than `days`.
+    pub async fn prune_bridge_events(&self, days: i32) -> Result<u64> {
+        Ok(
+            sqlx::query("DELETE FROM bridge_events WHERE time < now() - make_interval(days => $1)")
+                .bind(days)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
+
     pub async fn notify(&self, channel: &str, payload: &str) -> Result<()> {
         sqlx::query("SELECT pg_notify($1, $2)")
             .bind(channel)

@@ -111,13 +111,15 @@ async fn main() -> Result<()> {
     let audit = tokio::spawn(supervise("audit", move || audit(ctx).boxed()));
     let daily = tokio::spawn(supervise("daily", move || daily(ctx).boxed()));
     let labels = tokio::spawn(supervise("labels", move || labels(ctx).boxed()));
+    let bridges = tokio::spawn(supervise("bridges", move || bridges(ctx).boxed()));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
         move || retention(ctx, days).boxed()
     }));
 
     let _ = tokio::join!(
-        follow, backfill, snapshots, mempool, retag, economics, audit, daily, labels, retention
+        follow, backfill, snapshots, mempool, retag, economics, audit, daily, labels, bridges,
+        retention
     );
     Ok(())
 }
@@ -427,6 +429,80 @@ async fn labels(ctx: &Ctx) -> Result<()> {
             }
         }
         info!(labels = all.len(), "labels refreshed");
+        tokio::time::sleep(Duration::from_secs(600)).await;
+    }
+}
+
+/// Cross-chain flows (mainnet only): Maya swaps touching ZEC, NEAR Intents mints and burns,
+/// and daily bridge holdings. Kept for 90 days.
+async fn bridges(ctx: &Ctx) -> Result<()> {
+    use zscan_chain::{bridges, labels};
+    const KEEP_DAYS: i64 = 90;
+    if zscan_chain::is_testnet() {
+        return Ok(());
+    }
+    let http = zscan_chain::http_client_builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("zscan/0.1")
+        .build()?;
+    loop {
+        let cutoff = chrono::Utc::now().timestamp() - KEEP_DAYS * 86_400;
+
+        // Maya: newest page first (refreshes pending swaps), then older pages until known
+        // events or the retention window. Bounded so a first run backfills over a few cycles.
+        let mut token: Option<String> = None;
+        for page in 0..20 {
+            let (events, next) = match bridges::maya_swaps(&http, token.as_deref()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("maya swaps: {e:#}");
+                    break;
+                }
+            };
+            let Some(oldest) = events.last().cloned() else {
+                break;
+            };
+            let known = page > 0 && ctx.db.has_bridge_event("maya", &oldest.external_id).await?;
+            ctx.db.upsert_bridge_events(&events).await?;
+            if known || oldest.time < cutoff || next.is_none() {
+                break;
+            }
+            token = next;
+        }
+        match labels::maya_stats(&http).await {
+            Ok(stats) => {
+                if let Some(depth) = stats["asset_depth"].as_i64() {
+                    ctx.db.set_bridge_snapshot("maya", depth).await?;
+                }
+            }
+            Err(e) => warn!("maya stats: {e:#}"),
+        }
+
+        // NEAR Intents: ZEC minted on NEAR is ZEC the bridge holds on Zcash.
+        match bridges::near_zec_supply(&http).await {
+            Ok(supply) => {
+                ctx.db.set_bridge_snapshot("near-intents", supply).await?;
+                ctx.db
+                    .set_protocol_stats(
+                        "near-intents",
+                        &serde_json::json!({
+                            "zec_on_near": supply,
+                            "token": bridges::NEAR_ZEC_TOKEN,
+                            "source": format!("ft_total_supply of {} (NEAR RPC)", bridges::NEAR_ZEC_TOKEN),
+                        }),
+                    )
+                    .await?;
+            }
+            Err(e) => warn!("near supply: {e:#}"),
+        }
+        // NearBlocks' free tier is tight: one page per cycle, best effort.
+        match bridges::near_recent(&http).await {
+            Ok(events) => ctx.db.upsert_bridge_events(&events).await?,
+            Err(e) => warn!("near events: {e:#}"),
+        }
+
+        let pruned = ctx.db.prune_bridge_events(KEEP_DAYS as i32).await?;
+        info!(pruned, "bridge flows refreshed");
         tokio::time::sleep(Duration::from_secs(600)).await;
     }
 }

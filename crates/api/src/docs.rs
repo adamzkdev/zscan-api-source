@@ -11,8 +11,8 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, fees, labels, network, pools, price, protocols, rankings, search, status,
-    supply, tx, upgrades,
+    address, blocks, bridges, fees, labels, network, pools, price, protocols, rankings, search,
+    status, supply, tx, upgrades,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -106,7 +106,7 @@ protocol makes public."#;
         pools::current, pools::history, pools::migration,
         supply::supply, supply::audit, supply::funding, supply::anonymity,
         network::mempool, network::network, network::daily, fees::fees,
-        rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
+        rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail, bridges::overview,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
@@ -118,7 +118,7 @@ protocol makes public."#;
         (name = "pools", description = "Value pool balances over time and the Orchard → Ironwood migration (NU6.3)."),
         (name = "network", description = "Network stats, fees (ZIP-317), mempool, miners, price, service health and live events."),
         (name = "search", description = "Resolve any height, hash, txid or address."),
-        (name = "protocols", description = "Holdings and flows of protocols and entities touching ZEC: shielded pools, treasuries, bridges, mining pools, exchanges."),
+        (name = "protocols", description = "Holdings and flows of protocols and entities touching ZEC: shielded pools, treasuries, bridges, mining pools, exchanges, and cross-chain flows."),
         (name = "labels", description = "Address name tags, each with a verifiable source."),
     )
 )]
@@ -167,7 +167,7 @@ pub async fn index() -> Json<Value> {
             "/v1/address/{address}", "/v1/address/{address}/csv", "/v1/unified/{address}", "/v1/search?q=",
             "/v1/pools", "/v1/pools/history", "/v1/ironwood/migration", "/v1/supply", "/v1/supply/audit", "/v1/funding",
             "/v1/privacy/anonymity-sets", "/v1/network", "/v1/stats/daily", "/v1/fees", "/v1/mempool", "/v1/miners",
-            "/v1/accounts", "/v1/price", "/v1/price/history", "/v1/upgrades", "/v1/labels", "/v1/protocols", "/v1/protocols/{slug}"
+            "/v1/accounts", "/v1/price", "/v1/price/history", "/v1/upgrades", "/v1/labels", "/v1/protocols", "/v1/protocols/{slug}", "/v1/bridges"
         ],
         "amounts": "zatoshis (1 ZEC = 100,000,000 zat)",
         "rate_limit": "10 req/s per IP, burst 30"
