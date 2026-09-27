@@ -14,7 +14,7 @@ Open Zcash block explorer and data API — **[zscan.cash](https://zscan.cash)**.
   outputs.
 - **Dev fund tracker, anonymity sets, Orchard exit flows, ZIP-317 fee tracker, Nakamoto coefficient,
   Unified Address inspector, CSV export, reorg log.**
-- **Privacy-respecting**: no IP logs, no trackers, no ads, no cookies. Shielded data stays shielded; we only show
+- **Privacy-respecting**: no IP logs, no ads, no cookies; page views are counted with cookieless Plausible. Shielded data stays shielded; we only show
   what the chain makes public. MIT licensed.
 
 ## Verify the supply yourself
