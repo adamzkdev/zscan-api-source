@@ -1,7 +1,10 @@
-//! The NFT project registry (`labels/nft_projects.json`): curated facts about Zcash NFT
-//! projects, each citing public sources, and the links to what ZScan detects on chain.
+//! The NFT project registry: curated facts about Zcash NFT collections, each citing public
+//! sources, and the links to what ZScan detects on chain. It's maintained in the public
+//! github.com/adamzkdev/zscan-nft-registry; `labels/nft_projects.json` is the bundled copy used
+//! until (or when) the live one can't be read.
 
-use std::sync::OnceLock;
+use std::collections::HashSet;
+use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -71,17 +74,109 @@ pub struct Project {
 
 #[derive(Deserialize)]
 struct File {
-    projects: Vec<Project>,
+    #[serde(alias = "projects")]
+    collections: Vec<Project>,
 }
 
-/// The registry, parsed once.
-pub fn projects() -> &'static [Project] {
-    static P: OnceLock<Vec<Project>> = OnceLock::new();
-    P.get_or_init(|| {
-        serde_json::from_str::<File>(include_str!("../../../labels/nft_projects.json"))
-            .expect("labels/nft_projects.json is valid")
-            .projects
+/// Parses and checks a registry document.
+pub fn parse(json: &str) -> Result<Vec<Project>, String> {
+    let list = serde_json::from_str::<File>(json)
+        .map_err(|e| e.to_string())?
+        .collections;
+    validate(&list)?;
+    Ok(list)
+}
+
+/// The rules every registry version must follow.
+pub fn validate(ps: &[Project]) -> Result<(), String> {
+    let mut slugs = HashSet::new();
+    let https = |u: &str| u.starts_with("https://");
+    for p in ps {
+        let err = |m: &str| Err(format!("{}: {m}", p.slug));
+        if !slugs.insert(&p.slug) {
+            return err("duplicate slug");
+        }
+        if p.slug.is_empty()
+            || !p
+                .slug
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return err("bad slug");
+        }
+        if !KINDS.contains(&p.kind.as_str()) {
+            return err("unknown kind");
+        }
+        if !["verified", "likely"].contains(&p.confidence.as_str()) {
+            return err("unknown confidence");
+        }
+        if p.sources.is_empty() {
+            return err("needs a source");
+        }
+        let urls = [&p.website, &p.x, &p.discord, &p.telegram]
+            .into_iter()
+            .flatten()
+            .chain(p.sources.iter().map(|s| &s.url))
+            .chain(p.marketplaces.iter().map(|m| &m.url))
+            .chain(p.market.iter().map(|m| &m.url));
+        for u in urls {
+            if !https(u) {
+                return err(&format!("not an https link: {u}"));
+            }
+        }
+        if p.logo
+            .as_deref()
+            .is_some_and(|l| !https(l) && !l.starts_with("ipfs://"))
+        {
+            return err("logo must be https or ipfs");
+        }
+        if p.market
+            .as_ref()
+            .is_some_and(|m| !MARKETS.contains(&m.kind.as_str()))
+        {
+            return err("unsupported market");
+        }
+        if p.onchain
+            .drop
+            .as_deref()
+            .is_some_and(|d| !(d.starts_with("t1") && d.len() == 35))
+        {
+            return err("bad drop address");
+        }
+        if (p.onchain.zrc721.is_some() || p.onchain.drop.is_some()) && p.kind != "inscription" {
+            return err("only inscription collections link to the chain");
+        }
+    }
+    Ok(())
+}
+
+fn current() -> &'static RwLock<(u64, &'static [Project])> {
+    static C: OnceLock<RwLock<(u64, &'static [Project])>> = OnceLock::new();
+    C.get_or_init(|| {
+        let bundled = parse(include_str!("../../../labels/nft_projects.json"))
+            .expect("labels/nft_projects.json is valid");
+        RwLock::new((0, Vec::leak(bundled)))
     })
+}
+
+/// The registry in use: the live version once loaded, else the bundled copy.
+pub fn projects() -> &'static [Project] {
+    current().read().unwrap().1
+}
+
+/// Installs a new registry version (already parsed). Returns false when it's unchanged. Old
+/// versions stay allocated (they may still be borrowed), which is fine as changes are rare.
+pub fn replace(source: &str, list: Vec<Project>) -> bool {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut h);
+    let hash = h.finish();
+    let mut c = current().write().unwrap();
+    if c.0 == hash {
+        return false;
+    }
+    *c = (hash, Vec::leak(list));
+    true
 }
 
 pub fn by_slug(slug: &str) -> Option<&'static Project> {
@@ -104,59 +199,23 @@ pub fn for_drop(key: &str) -> Option<&'static Project> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     #[test]
-    fn registry_is_consistent() {
-        let ps = projects();
+    fn bundled_registry_is_valid() {
+        let ps = parse(include_str!("../../../labels/nft_projects.json")).unwrap();
         assert!(!ps.is_empty());
-        let mut slugs = HashSet::new();
-        for p in ps {
-            assert!(slugs.insert(&p.slug), "duplicate slug {}", p.slug);
-            assert!(
-                p.slug
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
-                "slug {}",
-                p.slug
-            );
-            assert!(
-                KINDS.contains(&p.kind.as_str()),
-                "{}: kind {}",
-                p.slug,
-                p.kind
-            );
-            assert!(
-                ["verified", "likely"].contains(&p.confidence.as_str()),
-                "{}: confidence",
-                p.slug
-            );
-            assert!(!p.sources.is_empty(), "{}: needs a source", p.slug);
-            let urls = [&p.website, &p.x, &p.discord, &p.telegram]
-                .into_iter()
-                .flatten()
-                .chain(p.sources.iter().map(|s| &s.url))
-                .chain(p.marketplaces.iter().map(|m| &m.url))
-                .chain(p.market.iter().map(|m| &m.url));
-            for u in urls {
-                assert!(u.starts_with("https://"), "{}: {u}", p.slug);
-            }
-            if let Some(l) = &p.logo {
-                assert!(
-                    l.starts_with("https://") || l.starts_with("ipfs://"),
-                    "{}: logo",
-                    p.slug
-                );
-            }
-            if let Some(m) = &p.market {
-                assert!(MARKETS.contains(&m.kind.as_str()), "{}: market", p.slug);
-            }
-            if let Some(d) = &p.onchain.drop {
-                assert!(d.starts_with("t1") && d.len() == 35, "{}: drop", p.slug);
-            }
-            if p.onchain.zrc721.is_some() || p.onchain.drop.is_some() {
-                assert_eq!(p.kind, "inscription", "{}: on-chain link", p.slug);
-            }
-        }
+    }
+
+    #[test]
+    fn invalid_versions_are_rejected() {
+        let ok = r#"{"collections":[{"slug":"a","name":"A","description":"d","kind":"marketplace","confidence":"verified","sources":[{"label":"s","url":"https://x.y"}]}]}"#;
+        assert!(parse(ok).is_ok());
+        assert!(parse(&ok.replace("https://x.y", "http://x.y")).is_err());
+        assert!(parse(&ok.replace(r#""kind":"marketplace""#, r#""kind":"other""#)).is_err());
+        assert!(parse(&ok.replace(
+            r#""sources":[{"label":"s","url":"https://x.y"}]"#,
+            r#""sources":[]"#
+        ))
+        .is_err());
     }
 }

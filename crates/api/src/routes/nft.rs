@@ -313,6 +313,19 @@ pub struct CollectionQuery {
     pub page: Option<usize>,
     /// Off-chain items: `id` (default), `rank` (rarest first) or `price` (cheapest listed first).
     pub sort: Option<String>,
+    /// `art`: every artwork of a ZRC-721 collection by id, minted or not (48 per `page`).
+    pub view: Option<String>,
+}
+
+/// An artwork of a ZRC-721 collection, whether or not it has been minted yet.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Artwork {
+    pub id: String,
+    pub name: String,
+    /// API path of its picture (from the collection's metadata).
+    pub image: String,
+    /// The inscription that minted it, if any (the first one when minted twice).
+    pub inscription: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
@@ -376,6 +389,10 @@ pub struct CollectionDetail {
     pub venue_total: Option<usize>,
     /// Latest sales reported by the marketplace (off-chain projects).
     pub venue_sales: Vec<VenueSale>,
+    /// With `view=art`: a page of every artwork of a ZRC-721 collection.
+    pub artworks: Vec<Artwork>,
+    /// How many artworks the collection declares.
+    pub artworks_total: Option<i64>,
 }
 
 /// A project or on-chain collection by slug (project slug, ZRC-721 name or drop address).
@@ -476,7 +493,43 @@ pub async fn collection(
         venue_sales = nft_markets::sales(p).await;
     }
 
+    let (mut artworks, mut artworks_total) = (vec![], None);
+    if let (Some(g), Some(supply)) = (&group, collection.supply) {
+        if g.kind == "zrc721" && meta.is_some() && supply > 0 {
+            artworks_total = Some(supply);
+            if q.view.as_deref() == Some("art") {
+                let page = q.page.unwrap_or(0).min(100_000) as i64;
+                let ids: Vec<String> = (page * 48..(page * 48 + 48).min(supply))
+                    .map(|i| i.to_string())
+                    .collect();
+                let minted: Vec<(String, String)> = sqlx::query_as(
+                    "SELECT DISTINCT ON (item) item, id FROM inscriptions
+                     WHERE media = 'collection' AND collection = $1 AND item = ANY($2)
+                     ORDER BY item, number",
+                )
+                .bind(&g.slug)
+                .bind(&ids)
+                .fetch_all(db)
+                .await?;
+                artworks = ids
+                    .into_iter()
+                    .map(|id| Artwork {
+                        name: format!("{} #{id}", collection.name),
+                        image: format!("/v1/collections/{}/art/{id}/image", collection.slug),
+                        inscription: minted
+                            .iter()
+                            .find(|(i, _)| *i == id)
+                            .map(|(_, x)| x.clone()),
+                        id,
+                    })
+                    .collect();
+            }
+        }
+    }
+
     Ok(Json(CollectionDetail {
+        artworks,
+        artworks_total,
         collection,
         meta,
         items_page: items,
@@ -511,6 +564,31 @@ async fn relay(src: &str) -> Result<Response, ApiError> {
             Ok((axum::http::StatusCode::BAD_GATEWAY, "Image unavailable").into_response())
         }
     }
+}
+
+/// The picture of a ZRC-721 artwork, from the collection's metadata (minted or not).
+#[utoipa::path(get, path = "/v1/collections/{slug}/art/{id}/image", params(("slug" = String, Path), ("id" = String, Path)),
+    responses((status = 200, description = "Image"), (status = 404), (status = 502)), tag = "inscriptions")]
+pub async fn artwork_image(
+    State(s): State<AppState>,
+    Path((slug, id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let (_, group) = resolve(&s, &slug).await?;
+    let g = group
+        .filter(|g| g.kind == "zrc721")
+        .ok_or_else(|| ApiError::NotFound(format!("{slug} has no artworks")))?;
+    let meta: String = sqlx::query_scalar("SELECT meta FROM collections WHERE name = $1")
+        .bind(&g.slug)
+        .fetch_optional(&s.db.pool)
+        .await?
+        .flatten()
+        .ok_or_else(|| ApiError::NotFound(format!("{slug} has no metadata")))?;
+    let src = ipfs::metadata(&meta, &id)
+        .await
+        .as_ref()
+        .and_then(ipfs::image_of)
+        .ok_or_else(|| ApiError::NotFound(format!("No picture for {slug} #{id}")))?;
+    relay(&src).await
 }
 
 /// An item kept by a marketplace (off-chain projects such as zkSNARKs): traits, listing and

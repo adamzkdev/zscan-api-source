@@ -117,6 +117,7 @@ async fn main() -> Result<()> {
     }
     tokio::spawn(ws::listen(state.clone()));
     tokio::spawn(routes::rankings::refresh_accounts(state.clone()));
+    tokio::spawn(refresh_nft_registry(state.http.clone()));
 
     let v1 = Router::new()
         .route("/", get(docs::index))
@@ -176,6 +177,10 @@ async fn main() -> Result<()> {
             "/collections/{slug}/items/{id}/image",
             get(routes::nft::venue_item_image),
         )
+        .route(
+            "/collections/{slug}/art/{id}/image",
+            get(routes::nft::artwork_image),
+        )
         .route("/nft-sales", get(routes::nft::sales))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
@@ -205,6 +210,35 @@ async fn main() -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// Keeps the NFT collection registry current from its public repository, so merged changes
+/// show up without a deploy. Versions that fail validation are ignored.
+async fn refresh_nft_registry(http: reqwest::Client) {
+    let url = env_or(
+        "NFT_REGISTRY_URL",
+        "https://raw.githubusercontent.com/adamzkdev/zscan-nft-registry/main/collections.json",
+    );
+    loop {
+        let fetched = async {
+            let r = http.get(&url).send().await?.error_for_status()?;
+            r.text().await
+        }
+        .await;
+        match fetched {
+            Ok(body) => match zscan_chain::nft_projects::parse(&body) {
+                Ok(list) => {
+                    let n = list.len();
+                    if zscan_chain::nft_projects::replace(&body, list) {
+                        info!(collections = n, "NFT registry updated");
+                    }
+                }
+                Err(e) => tracing::warn!("NFT registry rejected: {e}"),
+            },
+            Err(e) => tracing::warn!("NFT registry unreachable: {e}"),
+        }
+        tokio::time::sleep(Duration::from_secs(600)).await;
+    }
 }
 
 async fn healthcheck() -> Result<()> {

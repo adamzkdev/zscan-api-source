@@ -1,6 +1,6 @@
 {
-  "description": "Zcash NFT projects shown on ZScan. Every fact cites a public source. `kind` says where the items live and how far ZScan can verify them: inscription (Zcash transparent inscriptions, indexed from the chain), marketplace (a venue's own records), zsa-testnet (Zcash Shielded Assets on testnet), other-chain, upcoming (not minted). `onchain` links a project to what ZScan detects on chain: a ZRC-721 collection name or a launchpad drop (the address every mint paid). `market` names a supported marketplace API. PRs welcome.",
-  "projects": [
+  "description": "Bundled copy of github.com/adamzkdev/zscan-nft-registry (collections.json), used until the live registry loads. Edit the registry, not this file.",
+  "collections": [
     {
       "slug": "zemon",
       "name": "Zemon",
@@ -153,37 +153,6 @@
         {
           "label": "PANews: 8 Zcash NFT projects",
           "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c"
-        }
-      ]
-    },
-    {
-      "slug": "zcashpunks",
-      "name": "ZCashPunks",
-      "description": "Pixel-punk PFP collection inscribed on Zcash through Zerdinals. Its items can't yet be told apart from other Zerdinals mints on chain.",
-      "kind": "inscription",
-      "x": "https://x.com/Zcash_punks",
-      "supply": 3600,
-      "confidence": "likely",
-      "sources": [
-        {
-          "label": "Zerdinals market API",
-          "url": "https://market-api.zerdinals.com/api/market/collection/zcashpunks"
-        }
-      ]
-    },
-    {
-      "slug": "zerdinalsfdt",
-      "name": "ZerdinalsFDT",
-      "description": "Zerdinals Foundation Early Pass: access, priority mints and discounts in the Zerdinals ecosystem.",
-      "kind": "inscription",
-      "x": "https://x.com/zerdinalsFDT",
-      "logo": "ipfs://bafkreie5dszcvvqacb2jhnafcft6uale7uysivphuba74g3ee4detsnv4q",
-      "supply": 250,
-      "confidence": "likely",
-      "sources": [
-        {
-          "label": "Zerdinals market API",
-          "url": "https://market-api.zerdinals.com/api/market/collection/zerdinalsfdt"
         }
       ]
     }
