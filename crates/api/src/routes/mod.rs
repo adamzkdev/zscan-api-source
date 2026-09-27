@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod bridges;
 pub mod compact;
 pub mod fees;
+pub mod inscriptions;
 pub mod labels;
 pub mod network;
 pub mod pools;
@@ -14,6 +15,7 @@ pub mod status;
 pub mod supply;
 pub mod tx;
 pub mod upgrades;
+pub mod zrc20;
 
 /// Current tip height known to the index.
 pub async fn tip(db: &zscan_db::Db) -> anyhow::Result<Option<i32>> {

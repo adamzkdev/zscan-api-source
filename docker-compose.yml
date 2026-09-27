@@ -49,6 +49,8 @@ services:
       RPC_URL: ${RPC_URL:-https://zcash-mainnet-zebrad.gateway.tatum.io}
       RPC_RATE_PER_MIN: ${RPC_RATE_PER_MIN:-4}
       START_HEIGHT: ${START_HEIGHT:-3428143}
+      INSCRIPTIONS: ${INSCRIPTIONS:-on}
+      INSCRIPTION_CONTENT_MAX: ${INSCRIPTION_CONTENT_MAX:-61200}
       RUST_LOG: ${RUST_LOG:-info}
 
   api:
@@ -61,6 +63,7 @@ services:
       LWD_URL: ${LWD_URL:-https://zec.rocks:443,https://na.zec.rocks:443,https://eu.zec.rocks:443}
       LWD_RATE_PER_SEC: ${API_LWD_RATE_PER_SEC:-20}
       API_RATE_PER_SEC: ${API_RATE_PER_SEC:-10}
+      INSCRIPTION_BLOCKLIST: ${INSCRIPTION_BLOCKLIST:-}
       API_ADDR: 0.0.0.0:8080
       RUST_LOG: ${RUST_LOG:-info}
     ports:

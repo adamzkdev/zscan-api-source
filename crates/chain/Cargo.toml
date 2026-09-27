@@ -16,6 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 hex.workspace = true
+sha2 = "0.10"
 tracing.workspace = true
 lru.workspace = true
 zcash_address = "0.13"

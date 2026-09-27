@@ -151,6 +151,19 @@ async fn main() -> Result<()> {
         .route("/protocols", get(routes::protocols::list))
         .route("/protocols/{slug}", get(routes::protocols::detail))
         .route("/bridges", get(routes::bridges::overview))
+        .route("/inscriptions", get(routes::inscriptions::list))
+        .route("/inscriptions/stats", get(routes::inscriptions::stats))
+        .route("/inscriptions/{id}", get(routes::inscriptions::detail))
+        .route(
+            "/inscriptions/{id}/content",
+            get(routes::inscriptions::content),
+        )
+        .route(
+            "/address/{address}/inscriptions",
+            get(routes::inscriptions::by_address),
+        )
+        .route("/zrc20", get(routes::zrc20::list))
+        .route("/zrc20/{tick}", get(routes::zrc20::detail))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

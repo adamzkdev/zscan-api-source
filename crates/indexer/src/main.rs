@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use futures::{future::BoxFuture, FutureExt, TryStreamExt};
+use futures::{future::BoxFuture, FutureExt, StreamExt, TryStreamExt};
 use serde_json::json;
 use tracing::{error, info, warn};
 use zscan_chain::{consts::nu6_3_height, summarize, Lwd, Resolver, Rpc};
@@ -32,6 +32,13 @@ struct Config {
     backfill_concurrency: usize,
     /// Keep transactions for this many days only (blocks are always kept). Unset keeps all.
     tx_retention_days: Option<u32>,
+    /// Scan for inscriptions and ZRC-20 (`INSCRIPTIONS=off` disables it).
+    inscriptions: bool,
+    /// Blocks kept between the inscription scan and the tip, so reorgs don't reach it.
+    inscriptions_lag: u32,
+    /// Inscription content above this size (bytes) isn't stored; the API rebuilds it from the
+    /// chain on request.
+    inscription_content_max: usize,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -53,6 +60,9 @@ impl Config {
                 Ok(v) if !v.trim().is_empty() => Some(v.trim().parse()?),
                 _ => None,
             },
+            inscriptions: env_or("INSCRIPTIONS", "on") != "off",
+            inscriptions_lag: env_or("INSCRIPTIONS_LAG", "10").parse()?,
+            inscription_content_max: env_or("INSCRIPTION_CONTENT_MAX", "61200").parse()?,
         })
     }
 }
@@ -112,13 +122,31 @@ async fn main() -> Result<()> {
     let daily = tokio::spawn(supervise("daily", move || daily(ctx).boxed()));
     let labels = tokio::spawn(supervise("labels", move || labels(ctx).boxed()));
     let bridges = tokio::spawn(supervise("bridges", move || bridges(ctx).boxed()));
+    let inscriptions = tokio::spawn(supervise("inscriptions", {
+        let (on, lag, max) = (
+            cfg.inscriptions,
+            cfg.inscriptions_lag,
+            cfg.inscription_content_max,
+        );
+        move || inscriptions(ctx, on, lag, max).boxed()
+    }));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
         move || retention(ctx, days).boxed()
     }));
 
     let _ = tokio::join!(
-        follow, backfill, snapshots, mempool, retag, economics, audit, daily, labels, bridges,
+        follow,
+        backfill,
+        snapshots,
+        mempool,
+        retag,
+        economics,
+        audit,
+        daily,
+        labels,
+        bridges,
+        inscriptions,
         retention
     );
     Ok(())
@@ -505,6 +533,89 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
         info!(pruned, "bridge flows refreshed");
         tokio::time::sleep(Duration::from_secs(600)).await;
     }
+}
+
+/// Scans for inscriptions and ZRC-20 from the first envelope block, `lag` blocks behind the
+/// tip. Only transactions with transparent inputs are fetched: nothing else can carry an
+/// envelope or spend an inscription.
+async fn inscriptions(ctx: &Ctx, on: bool, lag: u32, content_max: usize) -> Result<()> {
+    const CHUNK: u32 = 500;
+    if !on || zscan_chain::is_testnet() {
+        return Ok(());
+    }
+    let mut engine = ctx.db.load_inscription_engine().await?;
+    let mut next = ctx.db.inscription_cursor().await?;
+    info!(
+        next,
+        inscriptions = engine.next_number - 1,
+        "inscription scan starting"
+    );
+    loop {
+        let (tip, _) = ctx.lwd.tip().await?;
+        let safe = tip.saturating_sub(lag);
+        if next > safe {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
+        let to = (next + CHUNK - 1).min(safe);
+        let t0 = std::time::Instant::now();
+        let before = engine.next_number;
+        let mut blocks = ctx
+            .lwd
+            .block_range(next, to)
+            .await?
+            .map_err(anyhow::Error::from)
+            .map_ok(|cb| transparent_txs(&ctx.lwd, cb))
+            .try_buffered(4);
+        let mut flushed = std::time::Instant::now();
+        while let Some((height, time, txs)) = blocks.try_next().await? {
+            for (index, tx) in &txs {
+                engine.apply_tx(height, time, *index, tx);
+            }
+            next = height + 1;
+            if !engine.out.is_empty() || flushed.elapsed() > Duration::from_secs(10) {
+                ctx.db
+                    .flush_inscriptions(&mut engine, next, content_max)
+                    .await?;
+                flushed = std::time::Instant::now();
+            }
+        }
+        ctx.db
+            .flush_inscriptions(&mut engine, next, content_max)
+            .await?;
+        info!(
+            to = next - 1,
+            new = engine.next_number - before,
+            total = engine.next_number - 1,
+            pending = engine.pending.len(),
+            behind = safe.saturating_sub(next - 1),
+            secs = t0.elapsed().as_secs_f32(),
+            "inscription scan"
+        );
+    }
+}
+
+/// Height, time and the decoded transactions with transparent inputs of a compact block.
+async fn transparent_txs(
+    lwd: &Lwd,
+    cb: zscan_chain::proto::CompactBlock,
+) -> Result<(u32, i64, Vec<(u32, zscan_chain::ParsedTx)>)> {
+    let height = cb.height as u32;
+    let txs = futures::stream::iter(cb.vtx.into_iter().filter(|t| !t.vin.is_empty()))
+        .map(|t| async move {
+            let txid = zscan_chain::hash::to_display(&t.txid);
+            let raw = lwd
+                .raw_tx(&txid)
+                .await?
+                .with_context(|| format!("tx {txid} not found"))?;
+            let tx = zscan_chain::parse_tx(&raw.data).with_context(|| format!("decode {txid}"))?;
+            Ok::<_, anyhow::Error>((t.index as u32, tx))
+        })
+        .buffered(16)
+        .try_collect()
+        .await
+        .with_context(|| format!("block {height}"))?;
+    Ok((height, cb.time as i64, txs))
 }
 
 /// Fills mining-pool tags for blocks indexed before tagging existed.

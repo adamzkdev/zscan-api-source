@@ -11,8 +11,8 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, bridges, compact, fees, labels, network, pools, price, protocols, rankings,
-    search, status, supply, tx, upgrades,
+    address, blocks, bridges, compact, fees, inscriptions, labels, network, pools, price,
+    protocols, rankings, search, status, supply, tx, upgrades, zrc20,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -108,6 +108,8 @@ protocol makes public."#;
         network::mempool, network::network, network::daily, fees::fees,
         rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
         compact::range, compact::tx_outputs, bridges::overview,
+        inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
+        inscriptions::by_address, zrc20::list, zrc20::detail,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
@@ -120,6 +122,7 @@ protocol makes public."#;
         (name = "network", description = "Network stats, fees (ZIP-317), mempool, miners, price, service health and live events."),
         (name = "search", description = "Resolve any height, hash, txid or address."),
         (name = "protocols", description = "Holdings and flows of protocols and entities touching ZEC: shielded pools, treasuries, bridges, mining pools, exchanges, and cross-chain flows."),
+        (name = "inscriptions", description = "Inscriptions (Zerdinals) inscribed in transparent scriptSigs and the ZRC-20 tokens they carry. Ownership follows transparent outputs; spending into a shielded transaction ends tracking."),
         (name = "labels", description = "Address name tags, each with a verifiable source."),
         (name = "shielded", description = "Compact blocks and full note ciphertexts for client-side scanning with a viewing key. Keys never reach the server."),
     )
