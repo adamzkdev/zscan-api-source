@@ -14,13 +14,13 @@ use crate::AppState;
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct SearchQuery {
-    /// Block height, block hash, txid, address, inscription or ZRC-20 ticker.
+    /// Block height, block hash, txid, address, inscription or collection.
     pub q: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResult {
-    /// block | tx | address | shielded_address | inscription | token | not_found
+    /// block | tx | address | shielded_address | inscription | collection | not_found
     #[serde(rename = "type")]
     pub kind: &'static str,
     /// Canonical identifier to navigate to.
@@ -28,7 +28,7 @@ pub struct SearchResult {
 }
 
 /// Resolves a search string to a block, transaction, address, inscription (`#123`, `<txid>i0`)
-/// or ZRC-20 ticker.
+/// or collection.
 #[utoipa::path(get, path = "/v1/search", params(SearchQuery),
     responses((status = 200, body = SearchResult)), tag = "search")]
 pub async fn search(
@@ -76,15 +76,17 @@ pub async fn search(
         Some(AddressKind::Shielded) => return found("shielded_address", q),
         None => {}
     }
-    // ZRC-20 tickers are 4-5 bytes; numbers were handled as heights above.
-    if (4..=5).contains(&lower.len()) {
-        let tick: Option<String> =
-            sqlx::query_scalar("SELECT tick FROM zrc20_tokens WHERE tick = $1")
-                .bind(&lower)
-                .fetch_optional(&s.db.pool)
-                .await?;
-        if let Some(t) = tick {
-            return found("token", t);
+    // ZRC-721 collection names.
+    if lower.len() <= 32 {
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT collection FROM inscriptions WHERE media = 'collection' AND collection = $1
+             LIMIT 1",
+        )
+        .bind(q.to_uppercase())
+        .fetch_optional(&s.db.pool)
+        .await?;
+        if let Some(n) = name {
+            return found("collection", n);
         }
     }
     if hash::is_hash(&lower) {

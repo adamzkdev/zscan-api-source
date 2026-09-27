@@ -9,9 +9,9 @@ Open Zcash block explorer and data API — **[zscan.cash](https://zscan.cash)**.
   halving countdown — computed from Zcash consensus rules (`zebra-chain`).
 - **Independent supply audit**: every node snapshot is reconciled against block-by-block decoded pool changes
   (7 dimensions, to the zatoshi). Reproduce it yourself with `zscan-verify`.
-- **Inscriptions & ZRC-20**: every Zerdinals inscription since block 3,132,356 (images, text, HTML, JSON) with
-  content served in a sandbox, owners and provenance tracked through transparent outputs, and ZRC-20 token
-  supply, holders and activity.
+- **Inscriptions (NFTs)**: every Zerdinals NFT since block 3,132,356 (on-chain images, SVG and HTML served in a
+  sandbox, ZRC-721 collections such as ZGODS, IPFS NFTs) with owners and provenance tracked through transparent
+  outputs.
 - **Dev fund tracker, anonymity sets, Orchard exit flows, ZIP-317 fee tracker, Nakamoto coefficient,
   Unified Address inspector, CSV export, reorg log.**
 - **Privacy-respecting**: no IP logs, no trackers, no ads, no cookies. Shielded data stays shielded; we only show
@@ -100,8 +100,10 @@ START_HEIGHT=0 API_PORT=8081 docker compose -f docker-compose.yml -f docker-comp
 | `START_HEIGHT` | indexer | NU6.3 activation of the network; or `tip-N` |
 | `BACKFILL_CHUNK`, `BACKFILL_CONCURRENCY` | indexer | 200, 4 |
 | `INSCRIPTIONS`, `INSCRIPTIONS_LAG` | indexer | `on` (`off` disables the scan), 10 blocks behind the tip |
+| `INSCRIPTIONS_MAX_DB_MB` | indexer | none (pauses the scan while the database is larger, for small volumes) |
 | `INSCRIPTION_CONTENT_MAX` | indexer | 61200 bytes; larger content is rebuilt from the chain on request |
 | `INSCRIPTION_BLOCKLIST` | api | none (comma-separated inscription ids never served) |
+| `IPFS_GATEWAY` | api | `https://gateway.pinata.cloud/ipfs` (collection metadata and IPFS images, relayed) |
 | `API_ADDR`, `API_RATE_PER_SEC` | api | `0.0.0.0:8080`, 10 |
 | `API_INTERNAL_URL` | web | `http://127.0.0.1:8080` (read at runtime) |
 | `ZSCAN_NETWORK`, `PUBLIC_WS_URL`, `MAINNET_URL`, `TESTNET_URL` | web | network badge, live events, network switcher |
