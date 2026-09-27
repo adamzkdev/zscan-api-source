@@ -105,6 +105,10 @@ pub struct ListQuery {
     pub cursor: Option<i64>,
     /// Max items (default 48, max 200).
     pub limit: Option<i64>,
+    /// ZRC-721 collection name (implies all media).
+    pub collection: Option<String>,
+    /// ZRC-721 item id within `collection`.
+    pub item: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -137,6 +141,7 @@ pub async fn list(
 ) -> ApiResult<InscriptionPage> {
     let limit = q.limit.unwrap_or(48).clamp(1, 200);
     let media: Vec<&str> = match q.media.as_deref() {
+        None | Some("") if q.collection.is_some() => vec![],
         None | Some("") | Some("nft") => NFT.to_vec(),
         Some("all") => vec![],
         Some(m) if MEDIA.contains(&m) => vec![m],
@@ -164,6 +169,8 @@ pub async fn list(
          WHERE (cardinality($1::text[]) = 0 OR media = ANY($1))
            AND ($2::text IS NULL OR state = $2)
            AND ($3::bigint IS NULL OR number {cmp} $3)
+           AND ($5::text IS NULL OR collection = upper($5))
+           AND ($6::text IS NULL OR item = $6)
          ORDER BY number {dir} LIMIT $4",
         cmp = if asc { ">" } else { "<" },
         dir = if asc { "ASC" } else { "DESC" },
@@ -173,6 +180,8 @@ pub async fn list(
         .bind(&q.state)
         .bind(q.cursor)
         .bind(limit + 1)
+        .bind(q.collection.as_deref().map(str::trim))
+        .bind(q.item.as_deref().map(str::trim))
         .fetch_all(&s.db.pool)
         .await?;
     let next = (items.len() as i64 > limit).then(|| {

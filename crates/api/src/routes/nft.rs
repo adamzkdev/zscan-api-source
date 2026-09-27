@@ -334,10 +334,28 @@ pub struct Sale {
     pub txid: String,
     pub height: i32,
     pub time: DateTime<Utc>,
+    /// Name of the launchpad drop it was minted in, when a project claims it.
+    #[sqlx(skip)]
+    pub drop_name: Option<String>,
+    #[serde(skip)]
+    drop_key: Option<String>,
 }
 
 const SALE_COLUMNS: &str = "i.id, i.number, i.media, i.collection, i.item, e.price,
-    e.from_addr AS seller, e.to_addr AS buyer, e.txid, e.height, e.time";
+    e.from_addr AS seller, e.to_addr AS buyer, e.txid, e.height, e.time, i.drop_key";
+
+fn named_sales(rows: Vec<Sale>) -> Vec<Sale> {
+    rows.into_iter()
+        .map(|mut s| {
+            s.drop_name = s
+                .drop_key
+                .as_deref()
+                .and_then(nft_projects::for_drop)
+                .map(|p| p.name.clone());
+            s
+        })
+        .collect()
+}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CollectionDetail {
@@ -434,14 +452,16 @@ pub async fn collection(
         .bind(&g.slug)
         .fetch_all(db)
         .await?;
-        recent_sales = sqlx::query_as(&format!(
-            "SELECT {SALE_COLUMNS} FROM inscription_events e
+        recent_sales = named_sales(
+            sqlx::query_as(&format!(
+                "SELECT {SALE_COLUMNS} FROM inscription_events e
              JOIN inscriptions i ON i.id = e.inscription_id
              WHERE e.price IS NOT NULL AND {member} ORDER BY e.height DESC LIMIT 25"
-        ))
-        .bind(&g.slug)
-        .fetch_all(db)
-        .await?;
+            ))
+            .bind(&g.slug)
+            .fetch_all(db)
+            .await?,
+        );
     }
 
     let (mut venue_items, mut venue_total, mut venue_sales) = (vec![], None, vec![]);
@@ -532,5 +552,5 @@ pub async fn sales(State(s): State<AppState>) -> ApiResult<Vec<Sale>> {
     ))
     .fetch_all(&s.db.pool)
     .await?;
-    Ok(Json(rows))
+    Ok(Json(named_sales(rows)))
 }
