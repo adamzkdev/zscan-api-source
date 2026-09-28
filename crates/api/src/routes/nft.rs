@@ -657,10 +657,7 @@ pub async fn collection(
     if let (Some(g), Some(supply), Some(meta)) = (&group, collection.supply, &meta) {
         // Only offer the artworks when their metadata can actually be read (some collections'
         // folders aren't served by any public gateway).
-        let readable = g.kind == "zrc721"
-            && supply > 0
-            && (ipfs::metadata(meta, "0").await.is_some()
-                || ipfs::metadata(meta, "1").await.is_some());
+        let readable = g.kind == "zrc721" && supply > 0 && metadata_readable(meta);
         if readable {
             artworks_total = Some(supply);
             // Mostly unminted collections open on every artwork, minted or not.
@@ -708,6 +705,60 @@ pub async fn collection(
         venue_total,
         venue_sales,
     }))
+}
+
+/// Starts the metadata checks of listed ZRC-721 collections at startup, so their first page view
+/// already knows whether to offer every artwork.
+pub async fn warm_metadata(db: sqlx::PgPool) {
+    let names: Vec<String> = nft_projects::projects()
+        .iter()
+        .filter_map(|p| p.onchain.zrc721.clone())
+        .collect();
+    let metas: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT meta FROM collections WHERE name = ANY($1)")
+            .bind(&names)
+            .fetch_all(&db)
+            .await
+            .unwrap_or_default();
+    for m in metas.into_iter().flatten() {
+        metadata_readable(&m);
+    }
+}
+
+/// Whether a collection's metadata folder can be read, checked in the background so a page
+/// never waits on IPFS gateways (an unreachable folder can take a minute to fail). Unknown
+/// folders count as unreadable until the first check finishes.
+fn metadata_readable(meta: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    /// `None` while a check is running.
+    type Known = HashMap<String, Option<(Instant, bool)>>;
+    static KNOWN: OnceLock<Mutex<Known>> = OnceLock::new();
+    let known = KNOWN.get_or_init(Default::default);
+    let mut map = known.lock().unwrap();
+    let last = match map.get(meta) {
+        Some(None) => return false,
+        Some(Some((at, ok))) => {
+            let ttl = Duration::from_secs(if *ok { 6 * 3600 } else { 1800 });
+            if at.elapsed() < ttl {
+                return *ok;
+            }
+            *ok
+        }
+        None => false,
+    };
+    map.insert(meta.to_string(), None);
+    let meta = meta.to_string();
+    tokio::spawn(async move {
+        let ok = ipfs::metadata(&meta, "0").await.is_some()
+            || ipfs::metadata(&meta, "1").await.is_some();
+        known
+            .lock()
+            .unwrap()
+            .insert(meta, Some((Instant::now(), ok)));
+    });
+    last
 }
 
 /// A project's logo, relayed so visitors never contact its host.
