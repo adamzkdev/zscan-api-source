@@ -24,6 +24,7 @@ lru.workspace = true
 url = "2"
 tracing-subscriber.workspace = true
 feed-rs = "3"
+base64 = "0.22"
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }

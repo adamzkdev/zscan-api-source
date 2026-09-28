@@ -11,8 +11,8 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, bridges, compact, fees, inscriptions, labels, network, news, nft, pools,
-    price, protocols, rankings, search, status, supply, tx, upgrades,
+    address, blocks, bridges, compact, fees, inscriptions, labels, market, network, news, nft,
+    pools, price, protocols, rankings, search, status, supply, tx, upgrades,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -112,6 +112,7 @@ protocol makes public."#;
         inscriptions::image, inscriptions::by_address,
         nft::collections, nft::collection, nft::collection_stats, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
         nft::sales, news::list, news::sources,
+        market::overview, market::daily, market::assets, market::assets_daily,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
@@ -122,6 +123,7 @@ protocol makes public."#;
         (name = "supply", description = "ZEC supply and issuance from consensus rules, the independent supply audit, grants and lockbox flows and anonymity sets."),
         (name = "pools", description = "Value pool balances over time and the Orchard → Ironwood migration (NU6.3)."),
         (name = "network", description = "Network stats, fees (ZIP-317), mempool, miners, price, service health and live events."),
+        (name = "market", description = "ZEC markets (spot and perpetual venues: volume, spread, open interest, funding) and ZEC on other chains (bridged and wrapped assets, supply, DEX liquidity)."),
         (name = "news", description = "Zcash news from official blogs, the forum, grants, digests and releases, plus network events ZScan detects (records, spikes)."),
         (name = "search", description = "Resolve any height, hash, txid or address."),
         (name = "protocols", description = "Holdings and flows of protocols and entities touching ZEC: shielded pools, treasuries, bridges, mining pools, exchanges, and cross-chain flows."),

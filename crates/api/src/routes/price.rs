@@ -49,6 +49,13 @@ pub struct PriceCache {
     value: Option<(Instant, Price)>,
 }
 
+impl PriceCache {
+    /// The last price fetched, if any.
+    pub fn latest(&self) -> Option<Price> {
+        self.value.as_ref().map(|(_, p)| p.clone())
+    }
+}
+
 pub type SharedPriceCache = Arc<Mutex<PriceCache>>;
 
 #[derive(Deserialize)]

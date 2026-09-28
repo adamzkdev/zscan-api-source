@@ -5,6 +5,7 @@ pub mod compact;
 pub mod fees;
 pub mod inscriptions;
 pub mod labels;
+pub mod market;
 pub mod network;
 pub mod news;
 pub mod nft;

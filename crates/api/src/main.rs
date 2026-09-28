@@ -3,6 +3,7 @@
 mod docs;
 mod error;
 mod ipfs;
+mod market;
 mod models;
 mod news;
 mod nft_markets;
@@ -145,6 +146,9 @@ async fn main() -> Result<()> {
         tokio::spawn(routes::price::refresh(state.clone()));
     }
     tokio::spawn(routes::nft::warm_metadata(state.db.pool.clone()));
+    if env_or("MARKET", "1") != "0" {
+        tokio::spawn(market::run(state.db.pool.clone()));
+    }
     if env_or("NEWS", "1") != "0" {
         tokio::spawn(news::run(state.db.pool.clone()));
     }
@@ -170,6 +174,10 @@ async fn main() -> Result<()> {
         .route("/mempool", get(routes::network::mempool))
         .route("/network", get(routes::network::network))
         .route("/stats/daily", get(routes::network::daily))
+        .route("/market", get(routes::market::overview))
+        .route("/market/daily", get(routes::market::daily))
+        .route("/ecosystem/assets", get(routes::market::assets))
+        .route("/ecosystem/assets/daily", get(routes::market::assets_daily))
         .route("/news", get(routes::news::list))
         .route("/news/sources", get(routes::news::sources))
         .route("/price", get(routes::price::price))
