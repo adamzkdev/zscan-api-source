@@ -1185,3 +1185,85 @@ mod tests {
         assert!((d[0].funding_8h.unwrap() - 0.0016).abs() < 1e-12);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Other coins (for comparisons and the calculator)
+// ---------------------------------------------------------------------------------------------
+
+/// Coins ZEC is compared with: (CoinPaprika id, symbol, name).
+const COINS: &[(&str, &str, &str)] = &[
+    ("btc-bitcoin", "BTC", "Bitcoin"),
+    ("eth-ethereum", "ETH", "Ethereum"),
+    ("usdt-tether", "USDT", "Tether"),
+    ("bnb-binance-coin", "BNB", "BNB"),
+    ("xrp-xrp", "XRP", "XRP"),
+    ("usdc-usd-coin", "USDC", "USD Coin"),
+    ("sol-solana", "SOL", "Solana"),
+    ("trx-tron", "TRX", "TRON"),
+    ("hype-hyperliquid", "HYPE", "Hyperliquid"),
+    ("doge-dogecoin", "DOGE", "Dogecoin"),
+    ("xmr-monero", "XMR", "Monero"),
+    ("ada-cardano", "ADA", "Cardano"),
+    ("bch-bitcoin-cash", "BCH", "Bitcoin Cash"),
+    ("near-near-protocol", "NEAR", "NEAR"),
+    ("ltc-litecoin", "LTC", "Litecoin"),
+    ("sui-sui", "SUI", "Sui"),
+    ("toncoin-the-open-network", "TON", "Toncoin"),
+    ("avax-avalanche", "AVAX", "Avalanche"),
+    ("dash-dash", "DASH", "Dash"),
+    ("zec-zcash", "ZEC", "Zcash"),
+];
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct Coin {
+    pub symbol: String,
+    pub name: String,
+    pub price_usd: f64,
+    pub market_cap_usd: Option<f64>,
+    pub change_24h: Option<f64>,
+    pub rank: Option<i64>,
+}
+
+/// Prices and market caps of the coins above (CoinPaprika's bulk tickers, one call, cached 10
+/// minutes; the last good list is kept if a refresh fails).
+pub async fn coins() -> Result<Vec<Coin>> {
+    type Cache = Option<(std::time::Instant, Vec<Coin>)>;
+    static CACHE: OnceLock<tokio::sync::Mutex<Cache>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(|| tokio::sync::Mutex::new(None))
+        .lock()
+        .await;
+    if let Some((at, c)) = cache.as_ref() {
+        if at.elapsed() < Duration::from_secs(600) {
+            return Ok(c.clone());
+        }
+    }
+    let fetched: Result<Vec<Coin>> = async {
+        let all = get("https://api.coinpaprika.com/v1/tickers?quotes=USD").await?;
+        let all = all.as_array().context("tickers")?;
+        Ok(COINS
+            .iter()
+            .filter_map(|(id, symbol, name)| {
+                let t = all.iter().find(|t| t["id"] == *id)?;
+                let q = &t["quotes"]["USD"];
+                Some(Coin {
+                    symbol: (*symbol).into(),
+                    name: (*name).into(),
+                    price_usd: f(&q["price"])?,
+                    market_cap_usd: f(&q["market_cap"]).filter(|m| *m > 0.0),
+                    change_24h: f(&q["percent_change_24h"]).map(|p| p / 100.0),
+                    rank: t["rank"].as_i64(),
+                })
+            })
+            .collect())
+    }
+    .await;
+    match fetched {
+        Ok(c) if !c.is_empty() => {
+            *cache = Some((std::time::Instant::now(), c.clone()));
+            Ok(c)
+        }
+        Ok(_) => cache.as_ref().map(|(_, c)| c.clone()).context("no coins"),
+        Err(e) => cache.as_ref().map(|(_, c)| c.clone()).ok_or(e),
+    }
+}

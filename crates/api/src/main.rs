@@ -180,6 +180,7 @@ async fn main() -> Result<()> {
         .route("/stats/daily", get(routes::network::daily))
         .route("/market", get(routes::market::overview))
         .route("/market/daily", get(routes::market::daily))
+        .route("/market/coins", get(routes::market::coins))
         .route("/ecosystem/assets", get(routes::market::assets))
         .route("/ecosystem/assets/daily", get(routes::market::assets_daily))
         .route("/news", get(routes::news::list))

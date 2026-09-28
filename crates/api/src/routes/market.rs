@@ -459,3 +459,42 @@ pub async fn assets_daily(
         .await?,
     ))
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Coins {
+    /// ZEC circulating supply from ZScan's own supply computation (ZEC).
+    pub zec_supply: Option<f64>,
+    /// Price of 1 ZEC in fiat currencies (usd, eur, gbp, chf, jpy, cad, aud).
+    pub fiat: BTreeMap<String, f64>,
+    pub coins: Vec<market::Coin>,
+}
+
+/// Prices and market caps of major coins next to ZEC, with ZEC's supply and fiat rates: what 1
+/// ZEC is worth in BTC, ETH, SOL…, and what ZEC would trade at with another coin's market cap.
+#[utoipa::path(get, path = "/v1/market/coins", responses((status = 200, body = Coins)), tag = "market")]
+pub async fn coins(State(s): State<AppState>) -> ApiResult<Coins> {
+    let coins = market::coins()
+        .await
+        .map_err(crate::error::ApiError::Internal)?;
+    let zec_supply: Option<i64> =
+        sqlx::query_scalar("SELECT supply FROM pool_snapshots ORDER BY height DESC LIMIT 1")
+            .fetch_optional(&s.db.pool)
+            .await?;
+    let fiat = s
+        .price
+        .lock()
+        .await
+        .latest()
+        .map(|p| {
+            p.rates
+                .into_iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "btc" | "eth"))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Json(Coins {
+        zec_supply: zec_supply.map(|z| z as f64 / 1e8),
+        fiat,
+        coins,
+    }))
+}

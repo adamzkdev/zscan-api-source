@@ -112,7 +112,7 @@ protocol makes public."#;
         inscriptions::image, inscriptions::by_address,
         nft::collections, nft::collection, nft::collection_stats, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
         nft::sales, news::list, news::sources,
-        market::overview, market::daily, market::assets, market::assets_daily,
+        market::overview, market::daily, market::coins, market::assets, market::assets_daily,
         crate::ws::handler,
     ),
     components(schemas(BlockSummary, TxRow, PoolValues, ErrorBody)),
