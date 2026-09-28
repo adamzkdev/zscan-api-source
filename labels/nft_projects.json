@@ -31,60 +31,6 @@
           "url": "https://paragraph.com/@onchaindiary/zksnarks-auction-what-bidders-bought-1"
         }
       ]
-    },
-    {
-      "slug": "zecfruits",
-      "name": "ZecFruits",
-      "description": "1,000 pixel-art fruits by Fruits Kingdom Higashine (FKH), a free-mint ZRC-721 collection on Zcash mainnet.",
-      "kind": "inscription",
-      "website": "https://zecfruits-assets.pages.dev",
-      "logo": "https://zecfruits-assets.pages.dev/assets/fruit-collection-v3.png",
-      "supply": 1000,
-      "minted_at": "2026-09-21",
-      "mint_price_zec": 0,
-      "onchain": {
-        "zrc721": "ZECFRUITS"
-      },
-      "confidence": "verified",
-      "sources": [
-        {
-          "label": "Collection site",
-          "url": "https://zecfruits-assets.pages.dev"
-        },
-        {
-          "label": "Universe indexer (zrunes.io)",
-          "url": "https://zrunes.io/idx/zcash-metaprotocols/nft-collections/zecfruits"
-        }
-      ]
-    },
-    {
-      "slug": "zeccats",
-      "name": "Zeccats",
-      "description": "3,333 pixel cats on Zcash, sold as a pre-order with on-chain ZRC-721 delivery to transparent addresses. The artwork isn't revealed yet and trading hasn't opened.",
-      "kind": "inscription",
-      "website": "https://zeccat.com",
-      "x": "https://x.com/zeccatnft",
-      "logo": "https://zeccat.com/brand/launch/logo-402-fa1599b81180.webp",
-      "supply": 3333,
-      "mint_price_zec": 0.001,
-      "onchain": {
-        "zrc721": "ZECATS"
-      },
-      "market": {
-        "kind": "zeccat",
-        "url": "https://zeccat.com"
-      },
-      "confidence": "likely",
-      "sources": [
-        {
-          "label": "Zeccats site",
-          "url": "https://zeccat.com"
-        },
-        {
-          "label": "PANews: 8 Zcash NFT projects",
-          "url": "https://panews.io/articles/01a0b4d3-ba26-76d8-a07b-3d676c614e3c"
-        }
-      ]
     }
   ]
 }
