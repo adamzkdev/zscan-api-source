@@ -254,20 +254,25 @@ pub fn near_events(page: &NearTxns) -> Vec<BridgeEvent> {
         .collect()
 }
 
-/// The latest zec.omft.near events (one NearBlocks page; its free tier allows only a few calls
-/// a minute, so callers poll it slowly).
+/// The latest mints and burns of zec.omft.near (NearBlocks' `event` filter: without it a page is
+/// mostly transfers inside NEAR). Two calls; its free tier allows only a few a minute, so
+/// callers poll it slowly.
 pub async fn near_recent(http: &reqwest::Client) -> Result<Vec<BridgeEvent>> {
-    let page: NearTxns = http
-        .get(format!(
-            "{NEARBLOCKS}/v1/fts/{NEAR_ZEC_TOKEN}/txns?per_page=100"
-        ))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await
-        .context("nearblocks txns")?;
-    Ok(near_events(&page))
+    let mut out = Vec::new();
+    for event in ["MINT", "BURN"] {
+        let page: NearTxns = http
+            .get(format!(
+                "{NEARBLOCKS}/v1/fts/{NEAR_ZEC_TOKEN}/txns?per_page=100&event={event}"
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("nearblocks txns")?;
+        out.extend(near_events(&page));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
