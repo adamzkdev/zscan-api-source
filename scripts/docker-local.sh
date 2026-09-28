@@ -17,7 +17,7 @@ mkdir -p docker/bin
 cp "target/$TARGET/release/"zscan-{indexer,api,verify} docker/bin/
 
 echo "==> Web standalone build"
-(cd web && npm ci --silent && npm run build)
+(cd "${SCAN_DIR:-../scan}" && npm ci --silent && npm run build)
 
 PROFILES=(--profile testnet)
 [[ "${NO_TESTNET:-}" == "1" ]] && PROFILES=()

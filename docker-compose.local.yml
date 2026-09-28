@@ -18,7 +18,7 @@ services:
     image: zscan-rust:local
   web:
     build:
-      context: ./web
+      context: ${SCAN_DIR:-../scan}
       dockerfile: Dockerfile.prebuilt
     image: zscan-web:local
     environment:

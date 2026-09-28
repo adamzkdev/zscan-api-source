@@ -77,7 +77,7 @@ services:
 
   web:
     build:
-      context: ./web
+      context: ${SCAN_DIR:-../scan}
     restart: unless-stopped
     environment:
       API_INTERNAL_URL: http://api:8080
@@ -124,7 +124,7 @@ services:
   web-testnet:
     profiles: [testnet]
     build:
-      context: ./web
+      context: ${SCAN_DIR:-../scan}
     environment:
       API_INTERNAL_URL: http://api-testnet:8080
       SITE_URL: ${TESTNET_SITE_URL:-https://testnet.zscan.cash}

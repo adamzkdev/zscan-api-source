@@ -1,8 +1,10 @@
-# ZScan
+# ZScan API
 
-Open Zcash block explorer and data API — **[zscan.cash](https://zscan.cash)**.
+Zcash indexer and public data API — **[api.zscan.cash](https://api.zscan.cash)**. The data layer behind
+[zscan.cash](https://zscan.cash) (explorer, repo `zscan`), [ai.zscan.cash](https://ai.zscan.cash) (`zscan-ai`) and
+the other ZScan products; each subdomain has its own repo.
 
-- **Explorer**: blocks, transactions (v1–v6, including Ironwood), transparent addresses, mempool, network stats.
+- **Indexer**: blocks, transactions (v1–v6, including Ironwood), transparent addresses, mempool, reorg-safe.
 - **Ironwood tracker**: Orchard → Ironwood migration (NU6.3), pool balances over time, daily flows, supply-integrity checks.
 - **Public API**: REST + WebSocket, OpenAPI spec at `/openapi.json`, interactive docs at `/docs`.
 - **Supply & issuance**: live supply, inflation, per-block split (miners / ZCG / coinholder fund), NU7 fee burn,
@@ -34,7 +36,6 @@ crates/
   api/      axum REST API, WebSocket (Postgres LISTEN/NOTIFY), OpenAPI (utoipa), per-IP rate limit
   verify/   zscan-verify CLI: trustless reproduction of the supply audit
 labels/     open address labels (mining pools from coinbase signatures), PRs welcome
-web/        Next.js 16 frontend (SSR), Recharts
 ```
 
 **Data sources** (all configurable):
@@ -54,8 +55,10 @@ docker compose up -d db
 export DATABASE_URL=postgres://zscan:zscan@127.0.0.1:5433/zscan
 cargo run --release -p zscan-indexer     # starts at the tip, backfills to NU6.3
 cargo run --release -p zscan-api         # http://127.0.0.1:8080/docs
-cd web && npm install && npm run dev     # http://localhost:3000
+cd ../scan && npm install && npm run dev  # explorer on http://localhost:3000
 ```
+
+The Docker setup also builds the explorer from `../scan` (clone `zscan` next to this repo, or set `SCAN_DIR`).
 
 Everything in Docker, mainnet **and** testnet, built on the host (works even when Docker's build network is
 restricted by a proxy; needs `zig`, `cargo-zigbuild` and the Linux Rust target):
@@ -83,7 +86,7 @@ Zcash Foundation's [Z3](https://github.com/ZcashFoundation/z3) stack (Zebra + Za
 ```bash
 # in z3/
 docker compose --profile indexer up -d
-# in zscan/
+# in zscan-api/
 START_HEIGHT=0 API_PORT=8081 docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
 ```
 
@@ -121,5 +124,4 @@ START_HEIGHT=0 API_PORT=8081 docker compose -f docker-compose.yml -f docker-comp
 
 ```bash
 cargo test
-cd web && npx tsc --noEmit && npx eslint .
 ```
