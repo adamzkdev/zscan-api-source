@@ -371,7 +371,7 @@ async fn audit(ctx: &Ctx) -> Result<()> {
     }
 }
 
-/// Keeps the `daily_blocks` and `daily_txs` rollups current: the last two days often, everything
+/// Keeps the `daily_blocks` and `daily_stats` rollups current: the last two days often, everything
 /// periodically (backfill and the economics fill touch older days). Pruning runs every 10 min
 /// on days older than the retention window, long after they were rolled up.
 async fn daily(ctx: &Ctx) -> Result<()> {
@@ -380,7 +380,7 @@ async fn daily(ctx: &Ctx) -> Result<()> {
         let since =
             (!tick.is_multiple_of(20)).then(|| chrono::Utc::now() - chrono::Duration::days(2));
         ctx.db.refresh_daily(since).await?;
-        ctx.db.refresh_daily_txs(since).await?;
+        ctx.db.refresh_daily_stats(since).await?;
         tick = tick.wrapping_add(1);
         tokio::time::sleep(Duration::from_secs(30)).await;
     }

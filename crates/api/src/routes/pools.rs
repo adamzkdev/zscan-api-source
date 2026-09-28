@@ -17,14 +17,14 @@ use crate::models::PoolValues;
 use crate::AppState;
 
 #[derive(Debug, sqlx::FromRow)]
-struct Snapshot {
-    height: i32,
+pub(crate) struct Snapshot {
+    pub height: i32,
     time: DateTime<Utc>,
-    transparent: i64,
-    sprout: i64,
-    sapling: i64,
-    orchard: i64,
-    ironwood: i64,
+    pub transparent: i64,
+    pub sprout: i64,
+    pub sapling: i64,
+    pub orchard: i64,
+    pub ironwood: i64,
     lockbox: i64,
     supply: i64,
 }
@@ -33,7 +33,7 @@ struct Snapshot {
 const ANCHOR: &str = "SELECT * FROM pool_snapshots
     WHERE height <= COALESCE((SELECT high FROM sync_state), 0) ORDER BY height DESC LIMIT 1";
 
-async fn anchor(s: &AppState) -> Result<Snapshot, ApiError> {
+pub(crate) async fn anchor(s: &AppState) -> Result<Snapshot, ApiError> {
     let snap = sqlx::query_as::<_, Snapshot>(ANCHOR)
         .fetch_optional(&s.db.pool)
         .await?;

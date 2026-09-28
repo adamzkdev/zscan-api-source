@@ -448,37 +448,49 @@ impl Db {
         Ok(())
     }
 
-    /// Recomputes the `daily_txs` rollup for days from `since` on (all when `None`). Only days
-    /// whose transactions are all stored are touched: the day holding the lowest stored
-    /// transaction height may be partial (backfill start or pruning), and older rows are kept
-    /// as they were computed before their transactions were pruned.
-    pub async fn refresh_daily_txs(&self, since: Option<DateTime<Utc>>) -> Result<u64> {
+    /// Recomputes the `daily_stats` rollup (transactions, blocks and pool deltas per day) for
+    /// days from `since` on (all when `None`). Only days whose transactions are all stored are
+    /// touched: the day holding the lowest stored transaction height may be partial (backfill
+    /// start or pruning), and older rows are kept as computed before their data was pruned.
+    pub async fn refresh_daily_stats(&self, since: Option<DateTime<Utc>>) -> Result<u64> {
         let r = sqlx::query(
             "WITH first AS (
-                SELECT date_trunc('day', time) + interval '1 day' AS day FROM blocks
-                WHERE height = (SELECT COALESCE(tx_low, low) FROM sync_state)
+                SELECT GREATEST(date_trunc('day', time) + interval '1 day',
+                                COALESCE(date_trunc('day', $1), '-infinity')) AS day
+                FROM blocks WHERE height = (SELECT COALESCE(tx_low, low) FROM sync_state)
              ), t AS (
-                SELECT date_trunc('day', time) AS day, *,
-                       -(sprout_vb + sapling_vb + orchard_vb + ironwood_vb) AS net_shielded
-                FROM transactions
-                WHERE time >= (SELECT day FROM first)
-                  AND ($1::timestamptz IS NULL OR time >= date_trunc('day', $1))
+                SELECT date_trunc('day', time) AS day,
+                       count(*) FILTER (WHERE kind <> 'coinbase') txs,
+                       count(*) FILTER (WHERE kind = 'transparent') transparent,
+                       count(*) FILTER (WHERE kind = 'shielding') shielding,
+                       count(*) FILTER (WHERE kind = 'deshielding') deshielding,
+                       count(*) FILTER (WHERE kind = 'shielded') shielded,
+                       count(*) FILTER (WHERE kind = 'migration') migration,
+                       count(*) FILTER (WHERE kind = 'mixed') mixed,
+                       COALESCE(sum(fee), 0) fees, sum(size) tx_bytes,
+                       sum(n_tin) tin, sum(n_tout) tout, sum(n_sapling_spends) ss,
+                       sum(n_sapling_outputs) so, sum(n_orchard_actions) oa,
+                       sum(n_ironwood_actions) ia,
+                       COALESCE(sum(-(sprout_vb + sapling_vb + orchard_vb + ironwood_vb)) FILTER (
+                           WHERE kind <> 'coinbase' AND sprout_vb + sapling_vb + orchard_vb + ironwood_vb < 0), 0) s_in,
+                       COALESCE(sum(sprout_vb + sapling_vb + orchard_vb + ironwood_vb) FILTER (
+                           WHERE kind <> 'coinbase' AND sprout_vb + sapling_vb + orchard_vb + ironwood_vb > 0), 0) s_out
+                FROM transactions WHERE time >= (SELECT day FROM first) GROUP BY 1
+             ), b AS (
+                SELECT date_trunc('day', time) AS day, count(*) blocks, sum(size) bytes, max(height) h,
+                       sum(d_transparent) dt, sum(d_sprout) dsp, sum(d_sapling) dsa,
+                       sum(d_orchard) dor, sum(d_ironwood) diw
+                FROM blocks WHERE time >= (SELECT day FROM first) GROUP BY 1
              )
-             INSERT INTO daily_txs
-             SELECT day,
-                    count(*) FILTER (WHERE kind <> 'coinbase'),
-                    count(*) FILTER (WHERE kind = 'transparent'),
-                    count(*) FILTER (WHERE kind = 'shielding'),
-                    count(*) FILTER (WHERE kind = 'deshielding'),
-                    count(*) FILTER (WHERE kind = 'shielded'),
-                    count(*) FILTER (WHERE kind = 'migration'),
-                    count(*) FILTER (WHERE kind = 'mixed'),
-                    COALESCE(sum(fee), 0), sum(size),
-                    sum(n_tin), sum(n_tout), sum(n_sapling_spends), sum(n_sapling_outputs),
-                    sum(n_orchard_actions), sum(n_ironwood_actions),
-                    COALESCE(sum(net_shielded) FILTER (WHERE kind <> 'coinbase' AND net_shielded > 0), 0),
-                    COALESCE(-sum(net_shielded) FILTER (WHERE kind <> 'coinbase' AND net_shielded < 0), 0)
-             FROM t GROUP BY day
+             INSERT INTO daily_stats (day, txs, transparent, shielding, deshielding, shielded,
+                migration, mixed, fees, tx_bytes, transparent_inputs, transparent_outputs,
+                sapling_spends, sapling_outputs, orchard_actions, ironwood_actions, shielded_in,
+                shielded_out, blocks, block_bytes, last_height, d_transparent, d_sprout, d_sapling,
+                d_orchard, d_ironwood)
+             SELECT day, txs, transparent, shielding, deshielding, shielded, migration, mixed, fees,
+                    tx_bytes, tin, tout, ss, so, oa, ia, s_in, s_out, blocks, bytes, h, dt, dsp, dsa,
+                    dor, diw
+             FROM t JOIN b USING (day)
              ON CONFLICT (day) DO UPDATE SET
                 txs = EXCLUDED.txs, transparent = EXCLUDED.transparent,
                 shielding = EXCLUDED.shielding, deshielding = EXCLUDED.deshielding,
@@ -488,7 +500,11 @@ impl Db {
                 transparent_outputs = EXCLUDED.transparent_outputs,
                 sapling_spends = EXCLUDED.sapling_spends, sapling_outputs = EXCLUDED.sapling_outputs,
                 orchard_actions = EXCLUDED.orchard_actions, ironwood_actions = EXCLUDED.ironwood_actions,
-                shielded_in = EXCLUDED.shielded_in, shielded_out = EXCLUDED.shielded_out",
+                shielded_in = EXCLUDED.shielded_in, shielded_out = EXCLUDED.shielded_out,
+                blocks = EXCLUDED.blocks, block_bytes = EXCLUDED.block_bytes,
+                last_height = EXCLUDED.last_height, d_transparent = EXCLUDED.d_transparent,
+                d_sprout = EXCLUDED.d_sprout, d_sapling = EXCLUDED.d_sapling,
+                d_orchard = EXCLUDED.d_orchard, d_ironwood = EXCLUDED.d_ironwood",
         )
         .bind(since)
         .execute(&self.pool)

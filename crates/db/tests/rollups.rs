@@ -92,11 +92,11 @@ async fn tx(pool: &PgPool, height: i32, n: i32, kind: &str, net_shielded: i64) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn daily_txs_skip_partial_days_and_survive_pruning(pool: PgPool) {
+async fn daily_stats_skip_partial_days_and_survive_pruning(pool: PgPool) {
     let db = Db { pool: pool.clone() };
     // Two blocks per day on days 0..=2; the index starts at block 2 (day 0 is partial).
     for h in 1..=6 {
-        block(&pool, h, (h - 1) / 2, 0).await;
+        block(&pool, h, (h - 1) / 2, 100).await;
     }
     for h in 2..=6 {
         tx(&pool, h, 0, "coinbase", 0).await;
@@ -107,15 +107,25 @@ async fn daily_txs_skip_partial_days_and_survive_pruning(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    db.refresh_daily_txs(None).await.unwrap();
+    db.refresh_daily_stats(None).await.unwrap();
     let rows: Vec<(i64, i64, i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT txs, shielding, fees, orchard_actions, shielded_in, shielded_out FROM daily_txs ORDER BY day",
+        "SELECT txs, shielding, fees, orchard_actions, shielded_in, shielded_out FROM daily_stats ORDER BY day",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
     // Days 1 and 2 only; coinbase excluded from counts and flows.
     assert_eq!(rows, vec![(4, 2, 60_000, 12, 1_400, 600); 2]);
+    let blocks: Vec<(i64, i64, i64, Option<i32>)> = sqlx::query_as(
+        "SELECT blocks, block_bytes, d_orchard, last_height FROM daily_stats ORDER BY day",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        blocks,
+        vec![(2, 2000, 200, Some(4)), (2, 2000, 200, Some(6))]
+    );
 
     // Pruning day 1's transactions leaves its row untouched.
     sqlx::query("DELETE FROM transactions WHERE height <= 4")
@@ -126,8 +136,8 @@ async fn daily_txs_skip_partial_days_and_survive_pruning(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    db.refresh_daily_txs(None).await.unwrap();
-    let txs: Vec<i64> = sqlx::query_scalar("SELECT txs FROM daily_txs ORDER BY day")
+    db.refresh_daily_stats(None).await.unwrap();
+    let txs: Vec<i64> = sqlx::query_scalar("SELECT txs FROM daily_stats ORDER BY day")
         .fetch_all(&pool)
         .await
         .unwrap();
