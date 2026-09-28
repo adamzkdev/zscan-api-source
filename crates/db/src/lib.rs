@@ -299,7 +299,8 @@ impl Db {
                 break;
             }
         }
-        sqlx::query("UPDATE sync_state SET tx_low = GREATEST($1, low)")
+        // Never moves down: a longer retention can't bring back transactions already deleted.
+        sqlx::query("UPDATE sync_state SET tx_low = GREATEST($1, low, tx_low)")
             .bind(cutoff)
             .execute(&self.pool)
             .await?;
