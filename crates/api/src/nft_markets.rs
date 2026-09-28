@@ -52,25 +52,75 @@ async fn fetch_json(url: &str) -> Option<Value> {
     }
 }
 
-/// GET a JSON document, cached for [`TTL`]. Failures are cached too (briefly), so a venue
-/// that's down doesn't slow every page.
-async fn get_json(url: &str) -> Option<Value> {
-    type Entry = (Instant, Option<Value>);
+/// Client for reads made while a visitor waits: fails fast.
+fn quick_client() -> &'static reqwest::Client {
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    C.get_or_init(|| {
+        zscan_chain::http_client_builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("zscan/0.1 (+https://zscan.cash)")
+            .build()
+            .expect("http client")
+    })
+}
+
+type Entry = (Instant, Option<Value>);
+
+fn cache() -> &'static Mutex<HashMap<String, Entry>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((t, v)) = cache.lock().await.get(url) {
-        if t.elapsed() < TTL {
-            return v.clone();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Fetches `url` and records it. A failed read keeps the last good value (only its time
+/// moves, so a venue that's down isn't asked again on every request).
+async fn refresh(url: String) -> Option<Value> {
+    let fresh = match quick_client()
+        .get(&url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+    {
+        Ok(r) => r.json::<Value>().await.ok(),
+        Err(e) => {
+            tracing::warn!("nft market {url}: {e:#}");
+            None
         }
-    }
-    let v = fetch_json(url).await;
-    let mut c = cache.lock().await;
-    // Item pages add one entry each; drop stale ones so the map stays small.
+    };
+    let mut c = cache().lock().await;
+    // Item pages add one entry each; drop old ones so the map stays small.
     if c.len() > 2_000 {
-        c.retain(|_, (t, _)| t.elapsed() < TTL);
+        c.retain(|_, (t, _)| t.elapsed() < TTL * 4);
     }
-    c.insert(url.to_string(), (Instant::now(), v.clone()));
-    v
+    let kept = match (&fresh, c.get(&url)) {
+        (None, Some((_, old))) => old.clone(),
+        _ => fresh,
+    };
+    c.insert(url, (Instant::now(), kept.clone()));
+    kept
+}
+
+/// GET a JSON document with stale-while-revalidate caching: a cached value is returned at
+/// once, and refreshed in the background once older than [`TTL`]. Only the very first read of
+/// a URL waits for the venue, so a slow or down marketplace never holds a page.
+async fn get_json(url: &str) -> Option<Value> {
+    static REFRESHING: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let cached = cache().lock().await.get(url).cloned();
+    match cached {
+        Some((t, v)) => {
+            if t.elapsed() >= TTL {
+                let busy = REFRESHING.get_or_init(Default::default);
+                if busy.lock().await.insert(url.to_string()) {
+                    let url = url.to_string();
+                    tokio::spawn(async move {
+                        refresh(url.clone()).await;
+                        busy.lock().await.remove(&url);
+                    });
+                }
+            }
+            v
+        }
+        None => refresh(url.to_string()).await,
+    }
 }
 
 /// A decimal ZEC string (`"0.69"`) in zatoshis.

@@ -65,18 +65,28 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let db = Db::connect(
-        &std::env::var("DATABASE_URL").context("DATABASE_URL is required")?,
-        16,
+    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
+    // Migrations may run long (index builds), so they get their own connection without the
+    // request pool's statement timeout.
+    {
+        let migrator = Db::connect(&database_url, 1).await?;
+        migrator.migrate().await?;
+        migrator.pool.close().await;
+    }
+    let db = Db::connect_bounded(
+        &database_url,
+        env_or("API_DB_CONNECTIONS", "16").parse()?,
+        Duration::from_secs(env_or("API_STATEMENT_TIMEOUT_SECS", "15").parse()?),
     )
     .await?;
-    db.migrate().await?;
-    let lwd = Lwd::connect_with(
+    // Short per-call timeout: a slow lightwalletd must not hold web requests for minutes.
+    let lwd = Lwd::connect_with_timeout(
         &env_or(
             "LWD_URL",
             "https://zec.rocks:443,https://na.zec.rocks:443,https://eu.zec.rocks:443",
         ),
         env_or("LWD_RATE_PER_SEC", "20").parse()?,
+        Duration::from_secs(env_or("API_LWD_TIMEOUT_SECS", "20").parse()?),
     )?;
     let per_sec: u32 = env_or("API_RATE_PER_SEC", "10").parse()?;
     let limiter = Arc::new(RateLimiter::keyed(
@@ -213,7 +223,8 @@ async fn main() -> Result<()> {
         .nest("/v1", v1)
         .route("/openapi.json", get(|| async { Json(docs::openapi()) }))
         .route("/docs", get(docs::page))
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(health))
+        .layer(middleware::from_fn(request_timeout))
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         // Traces carry method, path and status only: no client addresses or headers.
@@ -231,8 +242,86 @@ async fn main() -> Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// Resolves on SIGTERM (deploys, restarts) or Ctrl-C. In-flight requests then get a few seconds
+/// to finish; long-lived connections (WebSockets) don't hold the shutdown past that.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term => {},
+    }
+    let grace: u64 = env_or("API_SHUTDOWN_GRACE_SECS", "10")
+        .parse()
+        .unwrap_or(10);
+    info!(grace, "shutting down: finishing in-flight requests");
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(grace)).await;
+        info!("shutdown grace period over");
+        std::process::exit(0);
+    });
+}
+
+/// Readiness: the API answers and its database does. Platforms route traffic to a new
+/// deployment only once this passes.
+async fn health(State(s): State<AppState>) -> Response {
+    let db = tokio::time::timeout(
+        Duration::from_secs(3),
+        sqlx::query("SELECT 1").execute(&s.db.pool),
+    )
+    .await;
+    match db {
+        Ok(Ok(_)) => "ok".into_response(),
+        _ => (StatusCode::SERVICE_UNAVAILABLE, "database unavailable").into_response(),
+    }
+}
+
+/// Paths allowed to run long: the live WebSocket and compact-block downloads for the
+/// in-browser viewing-key scanner.
+fn long_running(path: &str) -> bool {
+    path == "/v1/ws" || path.starts_with("/v1/compact") || path.ends_with("/shielded")
+}
+
+/// Answers 503 instead of hanging when a request takes longer than `API_REQUEST_TIMEOUT_SECS`.
+async fn request_timeout(req: Request, next: Next) -> Response {
+    static LIMIT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    let limit = *LIMIT.get_or_init(|| {
+        Duration::from_secs(
+            env_or("API_REQUEST_TIMEOUT_SECS", "30")
+                .parse()
+                .unwrap_or(30),
+        )
+    });
+    if long_running(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let path = req.uri().path().to_string();
+    match tokio::time::timeout(limit, next.run(req)).await {
+        Ok(res) => res,
+        Err(_) => {
+            tracing::warn!(%path, "request timed out");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "timeout", "message": "The request took too long; try again" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Keeps the NFT collection registry current from its public repository, so merged changes

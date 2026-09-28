@@ -106,7 +106,14 @@ START_HEIGHT=0 API_PORT=8081 docker compose -f docker-compose.yml -f docker-comp
 | `NFT_REGISTRY_URL` | api | the public [zscan-nft-registry](https://github.com/adamzkdev/zscan-nft-registry) `collections.json` (refreshed every 10 min) |
 | `IPFS_GATEWAY` | api | `https://gateway.pinit.io/ipfs,https://gateway.pinata.cloud/ipfs` (tried in order; collection metadata and IPFS images, relayed) |
 | `API_ADDR`, `API_RATE_PER_SEC` | api | `0.0.0.0:8080`, 10 |
+| `API_MEDIA_RATE_PER_SEC` | api | 60 (pictures and inscribed files, burst ×5) |
+| `API_REQUEST_TIMEOUT_SECS` | api | 30 (longer requests answer 503; WebSocket and compact blocks exempt) |
+| `API_STATEMENT_TIMEOUT_SECS`, `API_DB_CONNECTIONS` | api | 15, 16 (per-statement limit and pool size; migrations run without the limit) |
+| `API_LWD_TIMEOUT_SECS` | api | 20 (per lightwalletd call made while serving a request) |
+| `API_SHUTDOWN_GRACE_SECS` | api | 10 (time in-flight requests get after SIGTERM) |
+| `PRICE_SKIP_COINGECKO`, `NFT_ARCHIVE` | api | unset, 1 (`1` = use the price fallbacks only; `0` = don't archive NFT marketplaces) |
 | `API_INTERNAL_URL` | web | `http://127.0.0.1:8080` (read at runtime) |
+| `API_TIMEOUT_MS` | web | 10000 (server-side API calls; one retry on network errors and 502/503/504) |
 | `ZSCAN_NETWORK`, `PUBLIC_WS_URL`, `MAINNET_URL`, `TESTNET_URL` | web | network badge, live events, network switcher |
 | `ZSCAN_HTTP_PROXY` | indexer, api | none (ambient `HTTP(S)_PROXY` is ignored) |
 

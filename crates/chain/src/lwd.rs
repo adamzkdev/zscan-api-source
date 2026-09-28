@@ -44,6 +44,16 @@ impl Lwd {
     /// `https://zec.rocks:443,https://na.zec.rocks:443`. Requests are spread round-robin and
     /// limited to `per_second_each` per endpoint (0 = unlimited, e.g. a self-hosted Zaino).
     pub fn connect_with(urls: &str, per_second_each: f64) -> Result<Self> {
+        Self::connect_with_timeout(urls, per_second_each, Duration::from_secs(120))
+    }
+
+    /// Like [`Lwd::connect_with`], with a per-call `timeout`: short for services answering web
+    /// requests, long for the indexer's bulk reads.
+    pub fn connect_with_timeout(
+        urls: &str,
+        per_second_each: f64,
+        timeout: Duration,
+    ) -> Result<Self> {
         let clients = urls
             .split(',')
             .map(str::trim)
@@ -52,7 +62,7 @@ impl Lwd {
                 let mut endpoint = Endpoint::from_shared(url.to_string())
                     .context("invalid lightwalletd url")?
                     .connect_timeout(Duration::from_secs(4))
-                    .timeout(Duration::from_secs(120))
+                    .timeout(timeout)
                     .tcp_keepalive(Some(Duration::from_secs(30)))
                     .http2_keep_alive_interval(Duration::from_secs(30));
                 if url.starts_with("https") {

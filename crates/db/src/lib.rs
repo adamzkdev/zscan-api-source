@@ -88,6 +88,31 @@ impl Db {
         Ok(Self { pool })
     }
 
+    /// A pool for services answering requests: a connection must be free within 5 s and a
+    /// statement may run at most `statement_timeout`, so one runaway query can't hold the
+    /// whole pool.
+    pub async fn connect_bounded(
+        url: &str,
+        max_connections: u32,
+        statement_timeout: std::time::Duration,
+    ) -> Result<Self> {
+        let ms = statement_timeout.as_millis();
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .after_connect(move |conn, _| {
+                Box::pin(async move {
+                    sqlx::query(&format!("SET statement_timeout = {ms}"))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(url)
+            .await?;
+        Ok(Self { pool })
+    }
+
     pub async fn migrate(&self) -> Result<()> {
         sqlx::migrate!("./migrations").run(&self.pool).await?;
         Ok(())

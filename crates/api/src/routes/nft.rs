@@ -351,6 +351,22 @@ fn rank(r: &CollectionRow) -> std::cmp::Reverse<String> {
 #[utoipa::path(get, path = "/v1/collections",
     responses((status = 200, body = [CollectionRow])), tag = "inscriptions")]
 pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionRow>> {
+    // The on-chain aggregates scan every collection inscription; they change at most once a
+    // block, so the list is kept 30 s.
+    type Cached = Option<(std::time::Instant, Vec<CollectionRow>)>;
+    static CACHE: std::sync::OnceLock<tokio::sync::Mutex<Cached>> = std::sync::OnceLock::new();
+    let mut cache = CACHE.get_or_init(Default::default).lock().await;
+    if let Some((at, rows)) = cache.as_ref() {
+        if at.elapsed() < std::time::Duration::from_secs(30) {
+            return Ok(Json(rows.clone()));
+        }
+    }
+    let rows = list_collections(&s).await?;
+    *cache = Some((std::time::Instant::now(), rows.clone()));
+    Ok(Json(rows))
+}
+
+async fn list_collections(s: &AppState) -> Result<Vec<CollectionRow>, ApiError> {
     let groups: Vec<Group> = sqlx::query_as(&group_sql("LIMIT 1000"))
         .fetch_all(&s.db.pool)
         .await?;
@@ -361,9 +377,9 @@ pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionR
             .find(|g| project_of(g).is_some_and(|q| q.slug == p.slug));
         rows.push(row(Some(p), g).await);
     }
-    add_activity(&s, &mut rows).await?;
+    add_activity(s, &mut rows).await?;
     rows.sort_by_key(rank);
-    Ok(Json(rows))
+    Ok(rows)
 }
 
 /// Where a collection's sales are read from.
