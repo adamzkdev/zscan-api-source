@@ -8,6 +8,7 @@ name = "zscan-indexer"
 path = "src/main.rs"
 
 [dependencies]
+reqwest.workspace = true
 zscan-chain.workspace = true
 zscan-db.workspace = true
 tokio.workspace = true

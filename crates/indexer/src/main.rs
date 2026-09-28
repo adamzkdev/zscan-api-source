@@ -478,6 +478,39 @@ async fn labels(ctx: &Ctx) -> Result<()> {
 
 /// Cross-chain flows (mainnet only): Maya swaps touching ZEC, NEAR Intents mints and burns,
 /// and daily bridge holdings. Kept for 90 days.
+/// Fetches and stores one page of NEAR Intents transactions (after a 6 s pause: the partner API
+/// allows a call every 5 s). Returns the page's oldest transaction id and time, and whether it
+/// was already stored, or None when the page is empty or the call failed.
+async fn near_intents_page(
+    ctx: &Ctx,
+    http: &reqwest::Client,
+    jwt: &str,
+    tokens: &zscan_chain::bridges::IntentTokens,
+    side: zscan_chain::bridges::IntentSide,
+    before: Option<&str>,
+) -> Result<Option<(String, i64, bool)>> {
+    use zscan_chain::bridges;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let txs = match bridges::intent_txs(http, jwt, side, before).await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("near intents {side:?}: {e:#}");
+            return Ok(None);
+        }
+    };
+    let Some(oldest) = txs.last() else {
+        return Ok(None);
+    };
+    let (id, time) = (oldest.id(), oldest.created_at_timestamp);
+    let known = ctx.db.has_bridge_event("near-intents", &id).await?;
+    let events: Vec<_> = txs
+        .iter()
+        .filter_map(|t| bridges::intent_event(tokens, t))
+        .collect();
+    ctx.db.upsert_bridge_events(&events).await?;
+    Ok(Some((id, time, known)))
+}
+
 async fn bridges(ctx: &Ctx) -> Result<()> {
     use zscan_chain::{bridges, labels};
     const KEEP_DAYS: i64 = 90;
@@ -490,6 +523,12 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
         .build()?;
     // Maya's Midgard is public and quick: every minute, for a near-live swap feed. NearBlocks'
     // free tier is tight: every 3 minutes. Holdings and pruning move slowly.
+    let near_jwt = std::env::var("NEAR_INTENTS_JWT")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let mut tokens = bridges::IntentTokens::new();
+    // Per side: None = not started, Some(None) = done, Some(Some(id)) = page older than id next.
+    let mut backfill: [Option<Option<String>>; 2] = [None, None];
     let mut tick: u64 = 0;
     loop {
         let cutoff = chrono::Utc::now().timestamp() - KEEP_DAYS * 86_400;
@@ -543,8 +582,61 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
                 Err(e) => warn!("near supply: {e:#}"),
             }
         }
-        // NearBlocks: one page per cycle, best effort.
-        if tick.is_multiple_of(3) {
+        // NEAR Intents swaps from its explorer API (partner key): newest page of each side, then
+        // older pages until known events or the retention window, a few per cycle so a first
+        // run backfills over time. Without a key, NearBlocks mints and burns (no counter side).
+        if let Some(jwt) = &near_jwt {
+            if tokens.is_empty() || tick.is_multiple_of(60) {
+                match bridges::intent_tokens(&http).await {
+                    Ok(t) => tokens = t,
+                    Err(e) => warn!("1click tokens: {e:#}"),
+                }
+            }
+            // Each side's own events: ZEC leaving Zcash (out) and arriving on it (in).
+            for (i, (side, direction)) in [
+                (bridges::IntentSide::FromZcash, "out"),
+                (bridges::IntentSide::ToZcash, "in"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                // Live: newest pages until one reaches known events.
+                let mut before: Option<String> = None;
+                for _ in 0..3 {
+                    let Some((oldest, time, known)) =
+                        near_intents_page(ctx, &http, jwt, &tokens, side, before.as_deref())
+                            .await?
+                    else {
+                        break;
+                    };
+                    if known || time < cutoff {
+                        break;
+                    }
+                    before = Some(oldest);
+                }
+                // Backfill: older pages from the oldest event seen, until the retention window.
+                // The cursor starts from the database after a restart.
+                if backfill[i].is_none() {
+                    backfill[i] = Some(
+                        ctx.db
+                            .oldest_bridge_event("near-intents", direction)
+                            .await?,
+                    );
+                }
+                for _ in 0..3 {
+                    let Some(Some(cursor)) = backfill[i].clone() else {
+                        break;
+                    };
+                    match near_intents_page(ctx, &http, jwt, &tokens, side, Some(&cursor)).await? {
+                        Some((oldest, time, _)) if time >= cutoff => {
+                            backfill[i] = Some(Some(oldest))
+                        }
+                        // Done (or the API stopped answering): retried after a restart.
+                        _ => backfill[i] = Some(None),
+                    }
+                }
+            }
+        } else if tick.is_multiple_of(3) {
             match bridges::near_recent(&http).await {
                 Ok(events) => ctx.db.upsert_bridge_events(&events).await?,
                 Err(e) => warn!("near events: {e:#}"),

@@ -591,11 +591,13 @@ impl Db {
         for e in events {
             sqlx::query(
                 "INSERT INTO bridge_events (protocol, external_id, direction, amount, counter_asset,
-                    counter_chain, usd, zcash_txid, external_url, status, time)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11))
+                    counter_chain, usd, zcash_txid, external_url, status, time, counter_amount,
+                    zcash_address, address_kind, referral)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11), $12, $13, $14, $15)
                  ON CONFLICT (protocol, external_id) DO UPDATE SET
                     direction = $3, amount = $4, usd = COALESCE($7, bridge_events.usd),
-                    zcash_txid = COALESCE($8, bridge_events.zcash_txid), status = $10",
+                    zcash_txid = COALESCE($8, bridge_events.zcash_txid), status = $10,
+                    counter_amount = COALESCE($12, bridge_events.counter_amount)",
             )
             .bind(e.protocol)
             .bind(&e.external_id)
@@ -608,11 +610,31 @@ impl Db {
             .bind(&e.external_url)
             .bind(&e.status)
             .bind(e.time as f64)
+            .bind(e.counter_amount)
+            .bind(&e.zcash_address)
+            .bind(e.address_kind)
+            .bind(&e.referral)
             .execute(&mut *tx)
             .await?;
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Id of a protocol's oldest stored event in one direction (where a backfill resumes).
+    pub async fn oldest_bridge_event(
+        &self,
+        protocol: &str,
+        direction: &str,
+    ) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT external_id FROM bridge_events WHERE protocol = $1 AND direction = $2
+             ORDER BY time LIMIT 1",
+        )
+        .bind(protocol)
+        .bind(direction)
+        .fetch_optional(&self.pool)
+        .await?)
     }
 
     /// Whether this protocol event is already stored (paging stops at known events).
