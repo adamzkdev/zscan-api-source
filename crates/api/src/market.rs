@@ -840,6 +840,10 @@ async fn supply(a: &Asset) -> Result<f64> {
             .await
             .and_then(|s| units(&s, a.decimals, false)),
         "coingecko" => {
+            // CoinGecko throttles cloud IPs: hourly at most, the last supply stays otherwise.
+            if !due(&format!("supply:{}", a.id), 3600) {
+                bail!("not due");
+            }
             let id = a.coingecko.as_deref().context("coingecko id")?;
             let r = get(&format!(
                 "https://api.coingecko.com/api/v3/coins/{id}?localization=false&tickers=false&community_data=false&developer_data=false"
@@ -940,77 +944,87 @@ fn trade_url(dex: &str, network: &str, token: &str, pool: &str) -> String {
     }
 }
 
-/// GET on GeckoTerminal's free tier (30 calls a minute, shared by the whole IP): a 429 waits for
-/// the window to reset and retries, up to three times.
-async fn gt_get(url: &str) -> Result<Value> {
-    for attempt in 0.. {
-        let r = http().get(url).send().await?;
-        if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 3 {
-            tokio::time::sleep(Duration::from_secs(20 * (attempt + 1))).await;
-            continue;
+/// True at most once per `secs` for a key (for sources that can't take every round).
+fn due(key: &str, secs: u64) -> bool {
+    static LAST: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        OnceLock::new();
+    let mut m = LAST.get_or_init(Default::default).lock().unwrap();
+    match m.get(key) {
+        Some(t) if t.elapsed() < Duration::from_secs(secs) => false,
+        _ => {
+            m.insert(key.to_string(), std::time::Instant::now());
+            true
         }
-        let status = r.status();
-        if !status.is_success() {
-            bail!("{url}: HTTP {status}");
-        }
-        return Ok(r.json().await?);
     }
-    unreachable!()
 }
 
-/// GeckoTerminal lists NEAR Intents as one pseudo-pool per pair, each reporting the whole
-/// Intents balances: their reserves repeat the same ZEC and are not counted as liquidity (their
-/// volume is real swaps and is kept).
-const PSEUDO_POOL_DEXES: [&str; 1] = ["near-intents"];
+/// DexScreener's chain ids for our registry's network names.
+fn dexscreener_chain(network: &str) -> &str {
+    match network {
+        "eth" => "ethereum",
+        other => other,
+    }
+}
 
-/// DEX figures from GeckoTerminal: the token's 24h volume and price, liquidity summed over its
-/// pools (first page, the deepest), and the top pools.
-async fn geckoterminal(network: &str, address: &str) -> Result<Market> {
-    let base = format!("https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}");
-    let t = gt_get(&base).await?;
-    let a = &t["data"]["attributes"];
-    // Stay under the free tier's 30 calls a minute.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let p = gt_get(&format!("{base}/pools?page=1")).await?;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let mut liquidity = 0.0;
-    let mut pools = Vec::new();
-    for x in p["data"].as_array().cloned().unwrap_or_default() {
-        let pa = &x["attributes"];
-        let dex = x["relationships"]["dex"]["data"]["id"]
+/// DEX figures from DexScreener (generous public API): every pair holding the token, its 24h
+/// volume, liquidity and price from the deepest pair where it is the base token.
+async fn dexscreener(network: &str, address: &str) -> Result<Market> {
+    let pairs = get(&format!(
+        "https://api.dexscreener.com/token-pairs/v1/{}/{address}",
+        dexscreener_chain(network)
+    ))
+    .await?;
+    let mut pairs = pairs.as_array().cloned().unwrap_or_default();
+    let liq = |p: &Value| f(&p["liquidity"]["usd"]).unwrap_or(0.0);
+    pairs.sort_by(|a, b| liq(b).total_cmp(&liq(a)));
+    let is_base = |p: &Value| {
+        p["baseToken"]["address"]
             .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let reserve =
-            f(&pa["reserve_in_usd"]).filter(|_| !PSEUDO_POOL_DEXES.contains(&dex.as_str()));
-        liquidity += reserve.unwrap_or(0.0);
-        if pools.len() < 12 {
-            let pool = pa["address"].as_str().unwrap_or_default();
-            pools.push(json!({
-                "name": pa["name"],
+            .is_some_and(|x| x.eq_ignore_ascii_case(address))
+    };
+    let pools: Vec<Value> = pairs
+        .iter()
+        .take(12)
+        .map(|p| {
+            let dex = p["dexId"].as_str().unwrap_or_default();
+            let pool = p["pairAddress"].as_str().unwrap_or_default();
+            json!({
+                "name": format!("{} / {}", p["baseToken"]["symbol"].as_str().unwrap_or("?"), p["quoteToken"]["symbol"].as_str().unwrap_or("?")),
                 "dex": dex,
                 "address": pool,
-                "liquidity_usd": reserve,
-                "volume_24h_usd": f(&pa["volume_usd"]["h24"]),
-                "url": format!("https://www.geckoterminal.com/{network}/pools/{pool}"),
-                "trade_url": trade_url(&dex, network, address, pool),
-            }));
-        }
-    }
-    // Holder count and concentration, where GeckoTerminal indexes them (not NEAR).
-    let info = gt_get(&format!("{base}/info")).await.ok();
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let holders = info.as_ref().map(|i| &i["data"]["attributes"]["holders"]);
+                "liquidity_usd": f(&p["liquidity"]["usd"]),
+                "volume_24h_usd": f(&p["volume"]["h24"]),
+                "url": p["url"],
+                "trade_url": trade_url(dex, network, address, pool),
+            })
+        })
+        .collect();
     Ok(Market {
-        holders: holders.and_then(|h| h["count"].as_i64()),
-        holders_top10: holders
-            .and_then(|h| f(&h["distribution_percentage"]["top_10"]))
-            .map(|p| p / 100.0),
-        price: f(&a["price_usd"]),
-        liquidity: Some(liquidity),
-        volume: f(&a["volume_usd"]["h24"]),
+        holders: None,
+        holders_top10: None,
+        price: pairs
+            .iter()
+            .find(|p| is_base(p))
+            .and_then(|p| f(&p["priceUsd"])),
+        // No pair at all: unknown, not zero.
+        liquidity: (!pairs.is_empty()).then(|| pairs.iter().map(liq).sum()),
+        volume: (!pairs.is_empty())
+            .then(|| pairs.iter().filter_map(|p| f(&p["volume"]["h24"])).sum()),
         pools: Value::Array(pools),
     })
+}
+
+/// Holder count and top-10 share from GeckoTerminal token info (one call, no retry).
+async fn gt_holders(network: &str, address: &str) -> Result<(Option<i64>, Option<f64>)> {
+    let info = get(&format!(
+        "https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}/info"
+    ))
+    .await?;
+    let h = &info["data"]["attributes"]["holders"];
+    Ok((
+        h["count"].as_i64(),
+        f(&h["distribution_percentage"]["top_10"]).map(|p| p / 100.0),
+    ))
 }
 
 async fn refresh_asset(db: &PgPool, a: &Asset) -> Result<()> {
@@ -1019,10 +1033,21 @@ async fn refresh_asset(db: &PgPool, a: &Asset) -> Result<()> {
         .map_err(|e| tracing::debug!(asset = %a.id, "supply: {e:#}"))
         .ok();
     let market = match (&a.geckoterminal, &a.hyperliquid_spot) {
-        (Some(net), _) => geckoterminal(net, &a.address)
-            .await
-            .map_err(|e| tracing::warn!(asset = %a.id, "geckoterminal: {e:#}"))
-            .ok(),
+        (Some(net), _) => {
+            let mut m = dexscreener(net, &a.address)
+                .await
+                .map_err(|e| tracing::warn!(asset = %a.id, "dexscreener: {e:#}"))
+                .ok();
+            // Holders only come from GeckoTerminal, whose free tier cloud IPs exhaust: hourly,
+            // best effort, the last figures stay otherwise.
+            if due(&format!("holders:{}", a.id), 3600) {
+                if let (Some(m), Ok((h, top))) = (m.as_mut(), gt_holders(net, &a.address).await) {
+                    m.holders = h;
+                    m.holders_top10 = top;
+                }
+            }
+            m
+        }
         (None, Some(_)) => {
             // An order book, not pools: the spot venue's own figures.
             let v = snapshot("hyperliquid", "spot").await.ok();
