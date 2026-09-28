@@ -154,7 +154,7 @@ pub async fn network(State(s): State<AppState>) -> ApiResult<Network> {
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct DailyQuery {
-    /// Number of days (default 30, max 365).
+    /// Number of days (default 30, max 3650).
     pub days: Option<i32>,
 }
 
@@ -162,6 +162,10 @@ pub struct DailyQuery {
 pub struct DailyStats {
     pub day: DateTime<Utc>,
     pub blocks: i64,
+    /// Whether transaction figures are known for this day (days before the indexed history, or
+    /// partially indexed, report zeros).
+    pub has_txs: bool,
+    /// Non-coinbase transactions, and their split by kind.
     pub txs: i64,
     pub transparent: i64,
     pub shielding: i64,
@@ -169,11 +173,26 @@ pub struct DailyStats {
     pub shielded: i64,
     pub migration: i64,
     pub mixed: i64,
+    /// Fees paid by the day's transactions (zatoshis).
     pub fees: i64,
     pub avg_block_size: f64,
+    pub tx_bytes: i64,
+    pub transparent_inputs: i64,
+    pub transparent_outputs: i64,
+    pub sapling_spends: i64,
+    pub sapling_outputs: i64,
+    pub orchard_actions: i64,
+    pub ironwood_actions: i64,
+    /// Zatoshis moved into / out of the shielded pools (summed per transaction).
+    pub shielded_in: i64,
+    pub shielded_out: i64,
+    /// New coins issued and fees burned (zatoshis; zero where economics are not known yet).
+    pub issued: i64,
+    pub burned: i64,
 }
 
-/// Daily transaction statistics by kind.
+/// Daily network statistics: blocks, transactions by kind, fees, shielded actions and flows,
+/// issuance. Rolled up by the indexer and kept after old transactions are pruned.
 #[utoipa::path(get, path = "/v1/stats/daily", params(DailyQuery),
     responses((status = 200, body = [DailyStats])), tag = "network")]
 pub async fn daily(
@@ -187,26 +206,25 @@ pub async fn daily(
          ), b AS (
             SELECT date_trunc('day', time) AS day, count(*) AS blocks, avg(size)::float8 AS avg_block_size
             FROM blocks WHERE time >= (SELECT t FROM since) GROUP BY 1
-         ), t AS (
-            SELECT date_trunc('day', time) AS day,
-                   count(*) FILTER (WHERE kind <> 'coinbase') AS txs,
-                   count(*) FILTER (WHERE kind = 'transparent') AS transparent,
-                   count(*) FILTER (WHERE kind = 'shielding') AS shielding,
-                   count(*) FILTER (WHERE kind = 'deshielding') AS deshielding,
-                   count(*) FILTER (WHERE kind = 'shielded') AS shielded,
-                   count(*) FILTER (WHERE kind = 'migration') AS migration,
-                   count(*) FILTER (WHERE kind = 'mixed') AS mixed,
-                   COALESCE(sum(fee), 0)::bigint AS fees
-            FROM transactions WHERE time >= (SELECT t FROM since) GROUP BY 1
          )
-         SELECT b.day, b.blocks, COALESCE(t.txs, 0) txs, COALESCE(t.transparent, 0) transparent,
+         SELECT b.day, b.blocks, t.day IS NOT NULL AS has_txs,
+                COALESCE(t.txs, 0) txs, COALESCE(t.transparent, 0) transparent,
                 COALESCE(t.shielding, 0) shielding, COALESCE(t.deshielding, 0) deshielding,
                 COALESCE(t.shielded, 0) shielded, COALESCE(t.migration, 0) migration,
-                COALESCE(t.mixed, 0) mixed, COALESCE(t.fees, 0) fees, b.avg_block_size
-         FROM b LEFT JOIN t USING (day)
+                COALESCE(t.mixed, 0) mixed, COALESCE(t.fees, 0) fees, b.avg_block_size,
+                COALESCE(t.tx_bytes, 0) tx_bytes,
+                COALESCE(t.transparent_inputs, 0) transparent_inputs,
+                COALESCE(t.transparent_outputs, 0) transparent_outputs,
+                COALESCE(t.sapling_spends, 0) sapling_spends,
+                COALESCE(t.sapling_outputs, 0) sapling_outputs,
+                COALESCE(t.orchard_actions, 0) orchard_actions,
+                COALESCE(t.ironwood_actions, 0) ironwood_actions,
+                COALESCE(t.shielded_in, 0) shielded_in, COALESCE(t.shielded_out, 0) shielded_out,
+                COALESCE(d.issued, 0) issued, COALESCE(d.burned, 0) burned
+         FROM b LEFT JOIN daily_txs t USING (day) LEFT JOIN daily_blocks d USING (day)
          ORDER BY b.day",
     )
-    .bind(q.days.unwrap_or(30).clamp(1, 365))
+    .bind(q.days.unwrap_or(30).clamp(1, 3650))
     .fetch_all(&s.db.pool)
     .await?;
     Ok(Json(rows))

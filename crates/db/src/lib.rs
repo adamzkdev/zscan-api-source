@@ -447,6 +447,54 @@ impl Db {
         Ok(())
     }
 
+    /// Recomputes the `daily_txs` rollup for days from `since` on (all when `None`). Only days
+    /// whose transactions are all stored are touched: the day holding the lowest stored
+    /// transaction height may be partial (backfill start or pruning), and older rows are kept
+    /// as they were computed before their transactions were pruned.
+    pub async fn refresh_daily_txs(&self, since: Option<DateTime<Utc>>) -> Result<u64> {
+        let r = sqlx::query(
+            "WITH first AS (
+                SELECT date_trunc('day', time) + interval '1 day' AS day FROM blocks
+                WHERE height = (SELECT COALESCE(tx_low, low) FROM sync_state)
+             ), t AS (
+                SELECT date_trunc('day', time) AS day, *,
+                       -(sprout_vb + sapling_vb + orchard_vb + ironwood_vb) AS net_shielded
+                FROM transactions
+                WHERE time >= (SELECT day FROM first)
+                  AND ($1::timestamptz IS NULL OR time >= date_trunc('day', $1))
+             )
+             INSERT INTO daily_txs
+             SELECT day,
+                    count(*) FILTER (WHERE kind <> 'coinbase'),
+                    count(*) FILTER (WHERE kind = 'transparent'),
+                    count(*) FILTER (WHERE kind = 'shielding'),
+                    count(*) FILTER (WHERE kind = 'deshielding'),
+                    count(*) FILTER (WHERE kind = 'shielded'),
+                    count(*) FILTER (WHERE kind = 'migration'),
+                    count(*) FILTER (WHERE kind = 'mixed'),
+                    COALESCE(sum(fee), 0), sum(size),
+                    sum(n_tin), sum(n_tout), sum(n_sapling_spends), sum(n_sapling_outputs),
+                    sum(n_orchard_actions), sum(n_ironwood_actions),
+                    COALESCE(sum(net_shielded) FILTER (WHERE kind <> 'coinbase' AND net_shielded > 0), 0),
+                    COALESCE(-sum(net_shielded) FILTER (WHERE kind <> 'coinbase' AND net_shielded < 0), 0)
+             FROM t GROUP BY day
+             ON CONFLICT (day) DO UPDATE SET
+                txs = EXCLUDED.txs, transparent = EXCLUDED.transparent,
+                shielding = EXCLUDED.shielding, deshielding = EXCLUDED.deshielding,
+                shielded = EXCLUDED.shielded, migration = EXCLUDED.migration, mixed = EXCLUDED.mixed,
+                fees = EXCLUDED.fees, tx_bytes = EXCLUDED.tx_bytes,
+                transparent_inputs = EXCLUDED.transparent_inputs,
+                transparent_outputs = EXCLUDED.transparent_outputs,
+                sapling_spends = EXCLUDED.sapling_spends, sapling_outputs = EXCLUDED.sapling_outputs,
+                orchard_actions = EXCLUDED.orchard_actions, ironwood_actions = EXCLUDED.ironwood_actions,
+                shielded_in = EXCLUDED.shielded_in, shielded_out = EXCLUDED.shielded_out",
+        )
+        .bind(since)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Inserts or refreshes labels. For each `(protocol, origin)` pair present in `labels`,
     /// addresses of that pair that are no longer listed are kept but marked inactive (e.g. a
     /// retired bridge vault), so their history stays attributed.

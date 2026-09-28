@@ -71,6 +71,69 @@ async fn daily_rollup_matches_blocks(pool: PgPool) {
     assert_eq!(n, 1);
 }
 
+/// Inserts a transaction in block `height` moving `net_shielded` zatoshis into Orchard.
+async fn tx(pool: &PgPool, height: i32, n: i32, kind: &str, net_shielded: i64) {
+    sqlx::query(
+        "INSERT INTO transactions (txid, height, block_index, time, version, size, kind, fee,
+             transparent_in, transparent_out, sprout_vb, sapling_vb, orchard_vb, ironwood_vb,
+             n_tin, n_tout, n_joinsplits, n_sapling_spends, n_sapling_outputs, n_orchard_actions,
+             n_ironwood_actions)
+         SELECT 't' || $1 || '-' || $2, $1, $2, time, 5, 500, $3, 10000, 0, 0, 0, 0, -$4, 0,
+                1, 1, 0, 0, 0, 2, 0
+         FROM blocks WHERE height = $1",
+    )
+    .bind(height)
+    .bind(n)
+    .bind(kind)
+    .bind(net_shielded)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn daily_txs_skip_partial_days_and_survive_pruning(pool: PgPool) {
+    let db = Db { pool: pool.clone() };
+    // Two blocks per day on days 0..=2; the index starts at block 2 (day 0 is partial).
+    for h in 1..=6 {
+        block(&pool, h, (h - 1) / 2, 0).await;
+    }
+    for h in 2..=6 {
+        tx(&pool, h, 0, "coinbase", 0).await;
+        tx(&pool, h, 1, "shielding", 700).await;
+        tx(&pool, h, 2, "deshielding", -300).await;
+    }
+    sqlx::query("UPDATE sync_state SET low = 2, high = 6")
+        .execute(&pool)
+        .await
+        .unwrap();
+    db.refresh_daily_txs(None).await.unwrap();
+    let rows: Vec<(i64, i64, i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT txs, shielding, fees, orchard_actions, shielded_in, shielded_out FROM daily_txs ORDER BY day",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    // Days 1 and 2 only; coinbase excluded from counts and flows.
+    assert_eq!(rows, vec![(4, 2, 60_000, 12, 1_400, 600); 2]);
+
+    // Pruning day 1's transactions leaves its row untouched.
+    sqlx::query("DELETE FROM transactions WHERE height <= 4")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sync_state SET tx_low = 5")
+        .execute(&pool)
+        .await
+        .unwrap();
+    db.refresh_daily_txs(None).await.unwrap();
+    let txs: Vec<i64> = sqlx::query_scalar("SELECT txs FROM daily_txs ORDER BY day")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(txs, vec![4, 4]);
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn audit_passes_and_catches_mismatch(pool: PgPool) {
     let db = Db { pool: pool.clone() };
