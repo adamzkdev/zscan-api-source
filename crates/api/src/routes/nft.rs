@@ -21,8 +21,6 @@ use crate::{ipfs, AppState};
 
 /// Fewest items for a launchpad drop to be listed as a collection.
 pub const MIN_DROP: i64 = 20;
-/// Fewest items for a ZRC-721 collection no project claims to be listed (skips test deploys).
-const MIN_UNCLAIMED_ZRC721: i64 = 5;
 
 /// Display name of a drop no project claims.
 pub fn drop_name(key: &str) -> String {
@@ -347,9 +345,9 @@ fn rank(r: &CollectionRow) -> std::cmp::Reverse<String> {
     std::cmp::Reverse(r.launched.clone().unwrap_or_default())
 }
 
-/// Zcash NFT collections, newest first: every project in the registry, with on-chain figures
-/// where ZScan indexes its items, plus ZRC-721 collections no project claims yet. (Launchpad
-/// drops no project claims stay reachable by address but aren't listed.)
+/// Zcash NFT collections listed on ZScan (the public registry), newest first, with on-chain
+/// figures where ZScan indexes their items and marketplace figures where a venue reports them.
+/// Collections no project claims stay reachable by name or address but aren't listed.
 #[utoipa::path(get, path = "/v1/collections",
     responses((status = 200, body = [CollectionRow])), tag = "inscriptions")]
 pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionRow>> {
@@ -362,11 +360,6 @@ pub async fn collections(State(s): State<AppState>) -> ApiResult<Vec<CollectionR
             .iter()
             .find(|g| project_of(g).is_some_and(|q| q.slug == p.slug));
         rows.push(row(Some(p), g).await);
-    }
-    for g in groups.iter().filter(|g| {
-        project_of(g).is_none() && g.kind == "zrc721" && g.items >= MIN_UNCLAIMED_ZRC721
-    }) {
-        rows.push(row(None, Some(g)).await);
     }
     add_activity(&s, &mut rows).await?;
     rows.sort_by_key(rank);
@@ -464,7 +457,8 @@ pub struct CollectionQuery {
     pub status: Option<String>,
     /// Off-chain items: an item number.
     pub q: Option<String>,
-    /// `art`: every artwork of a ZRC-721 collection by id, minted or not (48 per `page`).
+    /// `art`: every artwork of a ZRC-721 collection by id, minted or not (48 per `page`); the
+    /// default when most artworks aren't minted yet. `minted`: minted items only.
     pub view: Option<String>,
 }
 
@@ -595,11 +589,12 @@ pub async fn collection(
         } else {
             "i.media = 'collection' AND i.collection = $1"
         };
-        meta = sqlx::query_scalar("SELECT meta FROM collections WHERE name = $1")
-            .bind(&g.slug)
-            .fetch_optional(db)
-            .await?
-            .flatten();
+        meta =
+            sqlx::query_scalar::<_, Option<String>>("SELECT meta FROM collections WHERE name = $1")
+                .bind(&g.slug)
+                .fetch_optional(db)
+                .await?
+                .flatten();
         let mut page: Vec<InscriptionRow> = sqlx::query_as(&format!(
             "SELECT {ROW_COLUMNS} FROM inscriptions i
              WHERE {member} AND ($2::bigint IS NULL OR number > $2)
@@ -659,10 +654,18 @@ pub async fn collection(
     }
 
     let (mut artworks, mut artworks_total) = (vec![], None);
-    if let (Some(g), Some(supply)) = (&group, collection.supply) {
-        if g.kind == "zrc721" && meta.is_some() && supply > 0 {
+    if let (Some(g), Some(supply), Some(meta)) = (&group, collection.supply, &meta) {
+        // Only offer the artworks when their metadata can actually be read (some collections'
+        // folders aren't served by any public gateway).
+        let readable = g.kind == "zrc721"
+            && supply > 0
+            && (ipfs::metadata(meta, "0").await.is_some()
+                || ipfs::metadata(meta, "1").await.is_some());
+        if readable {
             artworks_total = Some(supply);
-            if q.view.as_deref() == Some("art") {
+            // Mostly unminted collections open on every artwork, minted or not.
+            let default_art = q.view.is_none() && q.cursor.is_none() && g.unique_items < supply;
+            if q.view.as_deref() == Some("art") || default_art {
                 let page = q.page.unwrap_or(0).min(100_000) as i64;
                 let ids: Vec<String> = (page * 48..(page * 48 + 48).min(supply))
                     .map(|i| i.to_string())
