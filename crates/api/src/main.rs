@@ -130,6 +130,9 @@ async fn main() -> Result<()> {
     tokio::spawn(ws::listen(state.clone()));
     tokio::spawn(routes::rankings::refresh_accounts(state.clone()));
     tokio::spawn(refresh_nft_registry(state.http.clone()));
+    if !zscan_chain::is_testnet() {
+        tokio::spawn(routes::price::refresh(state.clone()));
+    }
     if env_or("NFT_ARCHIVE", "1") != "0" {
         tokio::spawn(nft_markets::archive(state.db.pool.clone()));
     }
