@@ -885,10 +885,30 @@ pub async fn locked(parent: &Asset, holder: &str) -> Result<f64> {
 }
 
 struct Market {
+    holders: Option<i64>,
+    holders_top10: Option<f64>,
     price: Option<f64>,
     liquidity: Option<f64>,
     volume: Option<f64>,
     pools: Value,
+}
+
+/// GET on GeckoTerminal's free tier (30 calls a minute, shared by the whole IP): a 429 waits for
+/// the window to reset and retries, up to three times.
+async fn gt_get(url: &str) -> Result<Value> {
+    for attempt in 0.. {
+        let r = http().get(url).send().await?;
+        if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 3 {
+            tokio::time::sleep(Duration::from_secs(20 * (attempt + 1))).await;
+            continue;
+        }
+        let status = r.status();
+        if !status.is_success() {
+            bail!("{url}: HTTP {status}");
+        }
+        return Ok(r.json().await?);
+    }
+    unreachable!()
 }
 
 /// GeckoTerminal lists NEAR Intents as one pseudo-pool per pair, each reporting the whole
@@ -900,11 +920,11 @@ const PSEUDO_POOL_DEXES: [&str; 1] = ["near-intents"];
 /// pools (first page, the deepest), and the top pools.
 async fn geckoterminal(network: &str, address: &str) -> Result<Market> {
     let base = format!("https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}");
-    let t = get(&base).await?;
+    let t = gt_get(&base).await?;
     let a = &t["data"]["attributes"];
     // Stay under the free tier's 30 calls a minute.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let p = get(&format!("{base}/pools?page=1")).await?;
+    let p = gt_get(&format!("{base}/pools?page=1")).await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mut liquidity = 0.0;
     let mut pools = Vec::new();
@@ -927,7 +947,15 @@ async fn geckoterminal(network: &str, address: &str) -> Result<Market> {
             }));
         }
     }
+    // Holder count and concentration, where GeckoTerminal indexes them (not NEAR).
+    let info = gt_get(&format!("{base}/info")).await.ok();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let holders = info.as_ref().map(|i| &i["data"]["attributes"]["holders"]);
     Ok(Market {
+        holders: holders.and_then(|h| h["count"].as_i64()),
+        holders_top10: holders
+            .and_then(|h| f(&h["distribution_percentage"]["top_10"]))
+            .map(|p| p / 100.0),
         price: f(&a["price_usd"]),
         liquidity: Some(liquidity),
         volume: f(&a["volume_usd"]["h24"]),
@@ -941,11 +969,16 @@ async fn refresh_asset(db: &PgPool, a: &Asset) -> Result<()> {
         .map_err(|e| tracing::debug!(asset = %a.id, "supply: {e:#}"))
         .ok();
     let market = match (&a.geckoterminal, &a.hyperliquid_spot) {
-        (Some(net), _) => geckoterminal(net, &a.address).await.ok(),
+        (Some(net), _) => geckoterminal(net, &a.address)
+            .await
+            .map_err(|e| tracing::warn!(asset = %a.id, "geckoterminal: {e:#}"))
+            .ok(),
         (None, Some(_)) => {
             // An order book, not pools: the spot venue's own figures.
             let v = snapshot("hyperliquid", "spot").await.ok();
             v.map(|v| Market {
+                holders: None,
+                holders_top10: None,
                 price: v.price,
                 liquidity: None,
                 volume: v.volume_24h_usd,
@@ -966,16 +999,22 @@ async fn refresh_asset(db: &PgPool, a: &Asset) -> Result<()> {
             }
         }
     }
+    let (holders, holders_top10) = market
+        .as_ref()
+        .map_or((None, None), |m| (m.holders, m.holders_top10));
     let (price, liquidity, volume, pools) = match market {
         Some(m) => (m.price, m.liquidity, m.volume, Some(m.pools)),
         None => (None, None, None, None),
     };
     sqlx::query(
-        "INSERT INTO zec_assets_latest (asset, supply, price_usd, liquidity_usd, volume_24h_usd, pools, locked, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        "INSERT INTO zec_assets_latest (asset, supply, price_usd, liquidity_usd, volume_24h_usd, pools, locked,
+                                        holders, holders_top10, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
          ON CONFLICT (asset) DO UPDATE SET
             supply = COALESCE($2, zec_assets_latest.supply),
             locked = COALESCE($7, zec_assets_latest.locked),
+            holders = COALESCE($8, zec_assets_latest.holders),
+            holders_top10 = COALESCE($9, zec_assets_latest.holders_top10),
             price_usd = COALESCE($3, zec_assets_latest.price_usd),
             liquidity_usd = COALESCE($4, zec_assets_latest.liquidity_usd),
             volume_24h_usd = COALESCE($5, zec_assets_latest.volume_24h_usd),
@@ -989,6 +1028,8 @@ async fn refresh_asset(db: &PgPool, a: &Asset) -> Result<()> {
     .bind(volume)
     .bind(pools)
     .bind(lock)
+    .bind(holders)
+    .bind(holders_top10)
     .execute(db)
     .await?;
     sqlx::query(

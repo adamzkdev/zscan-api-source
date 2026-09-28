@@ -274,8 +274,11 @@ pub struct ZecAsset {
     /// `zcash`, or the id of the asset locked to mint this one.
     pub backed_by: String,
     pub website: String,
-    /// Link to the token on its chain's explorer.
+    /// The token's holder list on its chain's explorer.
     pub explorer_url: String,
+    /// Holders on its chain and the share held by the 10 largest (0–1), where indexed.
+    pub holders: Option<i64>,
+    pub holders_top10: Option<f64>,
     /// Total supply on its chain, ZEC.
     pub supply: Option<f64>,
     /// Part of the supply locked to back other listed assets.
@@ -315,12 +318,12 @@ pub struct Ecosystem {
 
 fn explorer_url(chain: &str, address: &str) -> String {
     match chain {
-        "bsc" => format!("https://bscscan.com/token/{address}"),
-        "base" => format!("https://basescan.org/token/{address}"),
-        "eth" => format!("https://etherscan.io/token/{address}"),
-        "solana" => format!("https://solscan.io/token/{address}"),
-        "near" => format!("https://nearblocks.io/token/{address}"),
-        "hyperliquid" => "https://app.hyperliquid.xyz/trade/UZEC/USDC".into(),
+        "bsc" => format!("https://bscscan.com/token/{address}#balances"),
+        "base" => format!("https://basescan.org/token/{address}#balances"),
+        "eth" => format!("https://etherscan.io/token/{address}#balances"),
+        "solana" => format!("https://solscan.io/token/{address}#holders"),
+        "near" => format!("https://nearblocks.io/token/{address}?tab=holders"),
+        "hyperliquid" => format!("https://app.hyperliquid.xyz/explorer/token/{address}"),
         _ => String::new(),
     }
 }
@@ -334,6 +337,8 @@ type LatestRow = (
     Option<f64>,
     Option<serde_json::Value>,
     DateTime<Utc>,
+    Option<i64>,
+    Option<f64>,
 );
 
 /// ZEC on other chains: every ZEC-backed asset (Binance-Peg, NEAR Intents, Omni Bridge, Unit,
@@ -342,7 +347,8 @@ type LatestRow = (
 #[utoipa::path(get, path = "/v1/ecosystem/assets", responses((status = 200, body = Ecosystem)), tag = "market")]
 pub async fn assets(State(s): State<AppState>) -> ApiResult<Ecosystem> {
     let rows: Vec<LatestRow> = sqlx::query_as(
-        "SELECT asset, supply, locked, price_usd, liquidity_usd, volume_24h_usd, pools, updated_at
+        "SELECT asset, supply, locked, price_usd, liquidity_usd, volume_24h_usd, pools, updated_at,
+                holders, holders_top10
          FROM zec_assets_latest",
     )
     .fetch_all(&s.db.pool)
@@ -370,6 +376,8 @@ pub async fn assets(State(s): State<AppState>) -> ApiResult<Ecosystem> {
                 backed_by: a.backed_by.clone(),
                 website: a.website.clone(),
                 explorer_url: explorer_url(&a.chain, &a.address),
+                holders: r.and_then(|r| r.8),
+                holders_top10: r.and_then(|r| r.9),
                 supply,
                 locked,
                 circulating: supply.map(|x| (x - locked.unwrap_or(0.0)).max(0.0)),

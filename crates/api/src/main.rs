@@ -146,10 +146,14 @@ async fn main() -> Result<()> {
         tokio::spawn(routes::price::refresh(state.clone()));
     }
     tokio::spawn(routes::nft::warm_metadata(state.db.pool.clone()));
-    if env_or("MARKET", "1") != "0" {
+    // Markets and news don't depend on the network: a testnet instance leaves them to mainnet
+    // (and doesn't double the calls against rate-limited sources like GeckoTerminal).
+    let mainnet = std::env::var("ZSCAN_NETWORK").map_or(true, |n| n != "testnet");
+    let default_on = if mainnet { "1" } else { "0" };
+    if env_or("MARKET", default_on) != "0" {
         tokio::spawn(market::run(state.db.pool.clone()));
     }
-    if env_or("NEWS", "1") != "0" {
+    if env_or("NEWS", default_on) != "0" {
         tokio::spawn(news::run(state.db.pool.clone()));
     }
     if env_or("NFT_ARCHIVE", "1") != "0" {
