@@ -1,11 +1,11 @@
 //! Cross-chain flows: ZEC moving between Zcash and other chains through Maya Protocol swaps and
 //! NEAR Intents, as reported by each protocol's public API (see the indexer's `bridges` task).
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::Json;
 use chrono::{DateTime, NaiveDate, Utc};
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
 use crate::error::ApiResult;
 use crate::AppState;
@@ -190,4 +190,79 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<BridgesOverview> {
         recent,
         since,
     }))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct EventsQuery {
+    /// Only events moving at least this many ZEC (default 0).
+    pub min_zec: Option<f64>,
+    /// maya or near-intents.
+    pub protocol: Option<String>,
+    /// Only events after this time (for polling).
+    pub since: Option<DateTime<Utc>>,
+    /// Default 50, max 500.
+    pub limit: Option<i64>,
+}
+
+/// Cross-chain events, newest first: every Maya swap and NEAR Intents mint or burn touching ZEC.
+/// With `min_zec` it is the live feed of large moves.
+#[utoipa::path(get, path = "/v1/bridges/events", params(EventsQuery),
+    responses((status = 200, body = [BridgeEventRow])), tag = "protocols")]
+pub async fn events(
+    State(s): State<AppState>,
+    Query(q): Query<EventsQuery>,
+) -> ApiResult<Vec<BridgeEventRow>> {
+    Ok(Json(
+        sqlx::query_as::<_, BridgeEventRow>(
+            "SELECT protocol, direction, amount, counter_asset, counter_chain, usd, zcash_txid,
+                    external_url, status, time
+             FROM bridge_events
+             WHERE amount >= $1 AND ($2::text IS NULL OR protocol = $2)
+               AND ($3::timestamptz IS NULL OR time > $3)
+             ORDER BY time DESC LIMIT $4",
+        )
+        .bind((q.min_zec.unwrap_or(0.0).max(0.0) * 1e8) as i64)
+        .bind(q.protocol.as_deref())
+        .bind(q.since)
+        .bind(q.limit.unwrap_or(50).clamp(1, 500))
+        .fetch_all(&s.db.pool)
+        .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct FlowsQuery {
+    /// Window in hours (default 24, max 2160 = 90 days).
+    pub hours: Option<i32>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct Flow {
+    pub protocol: String,
+    /// The other side: ETH, BTC, NEAR…
+    pub chain: String,
+    /// ZEC arriving on Zcash from `chain`, and leaving Zcash for it (zatoshis).
+    pub zec_in: i64,
+    pub zec_out: i64,
+    pub usd: Option<f64>,
+    pub count: i64,
+}
+
+/// ZEC flows between Zcash and each counter chain over a window, per protocol.
+#[utoipa::path(get, path = "/v1/bridges/flows", params(FlowsQuery),
+    responses((status = 200, body = [Flow])), tag = "protocols")]
+pub async fn flows(State(s): State<AppState>, Query(q): Query<FlowsQuery>) -> ApiResult<Vec<Flow>> {
+    Ok(Json(
+        sqlx::query_as::<_, Flow>(
+            "SELECT protocol, counter_chain AS chain,
+                    COALESCE(sum(amount) FILTER (WHERE direction = 'in'), 0)::bigint AS zec_in,
+                    COALESCE(sum(amount) FILTER (WHERE direction = 'out'), 0)::bigint AS zec_out,
+                    sum(usd) AS usd, count(*) AS count
+             FROM bridge_events WHERE time >= now() - make_interval(hours => $1)
+             GROUP BY 1, 2 ORDER BY sum(amount) DESC",
+        )
+        .bind(q.hours.unwrap_or(24).clamp(1, 2160))
+        .fetch_all(&s.db.pool)
+        .await?,
+    ))
 }

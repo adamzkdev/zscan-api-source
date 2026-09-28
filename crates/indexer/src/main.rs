@@ -488,6 +488,9 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
         .timeout(Duration::from_secs(20))
         .user_agent("zscan/0.1")
         .build()?;
+    // Maya's Midgard is public and quick: every minute, for a near-live swap feed. NearBlocks'
+    // free tier is tight: every 3 minutes. Holdings and pruning move slowly.
+    let mut tick: u64 = 0;
     loop {
         let cutoff = chrono::Utc::now().timestamp() - KEEP_DAYS * 86_400;
 
@@ -512,20 +515,21 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
             }
             token = next;
         }
-        match labels::maya_stats(&http).await {
-            Ok(stats) => {
-                if let Some(depth) = stats["asset_depth"].as_i64() {
-                    ctx.db.set_bridge_snapshot("maya", depth).await?;
+        if tick.is_multiple_of(10) {
+            match labels::maya_stats(&http).await {
+                Ok(stats) => {
+                    if let Some(depth) = stats["asset_depth"].as_i64() {
+                        ctx.db.set_bridge_snapshot("maya", depth).await?;
+                    }
                 }
+                Err(e) => warn!("maya stats: {e:#}"),
             }
-            Err(e) => warn!("maya stats: {e:#}"),
-        }
 
-        // NEAR Intents: ZEC minted on NEAR is ZEC the bridge holds on Zcash.
-        match bridges::near_zec_supply(&http).await {
-            Ok(supply) => {
-                ctx.db.set_bridge_snapshot("near-intents", supply).await?;
-                ctx.db
+            // NEAR Intents: ZEC minted on NEAR is ZEC the bridge holds on Zcash.
+            match bridges::near_zec_supply(&http).await {
+                Ok(supply) => {
+                    ctx.db.set_bridge_snapshot("near-intents", supply).await?;
+                    ctx.db
                     .set_protocol_stats(
                         "near-intents",
                         &serde_json::json!({
@@ -535,18 +539,23 @@ async fn bridges(ctx: &Ctx) -> Result<()> {
                         }),
                     )
                     .await?;
+                }
+                Err(e) => warn!("near supply: {e:#}"),
             }
-            Err(e) => warn!("near supply: {e:#}"),
         }
-        // NearBlocks' free tier is tight: one page per cycle, best effort.
-        match bridges::near_recent(&http).await {
-            Ok(events) => ctx.db.upsert_bridge_events(&events).await?,
-            Err(e) => warn!("near events: {e:#}"),
+        // NearBlocks: one page per cycle, best effort.
+        if tick.is_multiple_of(3) {
+            match bridges::near_recent(&http).await {
+                Ok(events) => ctx.db.upsert_bridge_events(&events).await?,
+                Err(e) => warn!("near events: {e:#}"),
+            }
         }
-
-        let pruned = ctx.db.prune_bridge_events(KEEP_DAYS as i32).await?;
-        info!(pruned, "bridge flows refreshed");
-        tokio::time::sleep(Duration::from_secs(600)).await;
+        if tick.is_multiple_of(60) {
+            let pruned = ctx.db.prune_bridge_events(KEEP_DAYS as i32).await?;
+            info!(pruned, "bridge flows refreshed");
+        }
+        tick += 1;
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 

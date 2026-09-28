@@ -107,7 +107,7 @@ protocol makes public."#;
         supply::supply, supply::audit, supply::funding, supply::anonymity,
         network::mempool, network::network, network::daily, fees::fees,
         rankings::miners, rankings::accounts, price::price, price::history, status::health, upgrades::list, labels::list, protocols::list, protocols::detail,
-        compact::range, compact::tx_outputs, bridges::overview,
+        compact::range, compact::tx_outputs, bridges::overview, bridges::events, bridges::flows,
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
         inscriptions::image, inscriptions::by_address,
         nft::collections, nft::collection, nft::collection_stats, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,

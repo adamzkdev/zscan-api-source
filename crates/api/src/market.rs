@@ -893,6 +893,53 @@ struct Market {
     pools: Value,
 }
 
+/// Where to buy ZEC in a pool: the DEX's own swap page with ZEC as the output token, else the
+/// pool page on GeckoTerminal.
+fn trade_url(dex: &str, network: &str, token: &str, pool: &str) -> String {
+    let evm_chain = |uniswap: bool| match network {
+        "bsc" => {
+            if uniswap {
+                "bnb"
+            } else {
+                "bsc"
+            }
+        }
+        "base" => "base",
+        _ => {
+            if uniswap {
+                "mainnet"
+            } else {
+                "eth"
+            }
+        }
+    };
+    if dex.starts_with("uniswap") {
+        format!(
+            "https://app.uniswap.org/swap?chain={}&outputCurrency={token}",
+            evm_chain(true)
+        )
+    } else if dex.starts_with("pancakeswap") {
+        format!(
+            "https://pancakeswap.finance/swap?chain={}&outputCurrency={token}",
+            evm_chain(false)
+        )
+    } else if dex.starts_with("aerodrome") {
+        format!("https://aerodrome.finance/swap?from=eth&to={token}")
+    } else if dex.starts_with("orca") {
+        format!("https://www.orca.so/?tokenIn=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&tokenOut={token}")
+    } else if dex.starts_with("raydium") {
+        format!("https://raydium.io/swap/?inputMint=sol&outputMint={token}")
+    } else if dex.starts_with("meteora") {
+        format!("https://app.meteora.ag/dlmm/{pool}")
+    } else if dex.starts_with("rhea") || dex.starts_with("ref-finance") {
+        format!("https://app.rhea.finance/#usdt.tether-token.near|{token}")
+    } else if dex == "near-intents" {
+        "https://app.near-intents.org/".into()
+    } else {
+        format!("https://www.geckoterminal.com/{network}/pools/{pool}")
+    }
+}
+
 /// GET on GeckoTerminal's free tier (30 calls a minute, shared by the whole IP): a 429 waits for
 /// the window to reset and retries, up to three times.
 async fn gt_get(url: &str) -> Result<Value> {
@@ -937,13 +984,16 @@ async fn geckoterminal(network: &str, address: &str) -> Result<Market> {
         let reserve =
             f(&pa["reserve_in_usd"]).filter(|_| !PSEUDO_POOL_DEXES.contains(&dex.as_str()));
         liquidity += reserve.unwrap_or(0.0);
-        if pools.len() < 6 {
+        if pools.len() < 12 {
+            let pool = pa["address"].as_str().unwrap_or_default();
             pools.push(json!({
                 "name": pa["name"],
                 "dex": dex,
+                "address": pool,
                 "liquidity_usd": reserve,
                 "volume_24h_usd": f(&pa["volume_usd"]["h24"]),
-                "url": format!("https://www.geckoterminal.com/{network}/pools/{}", pa["address"].as_str().unwrap_or_default()),
+                "url": format!("https://www.geckoterminal.com/{network}/pools/{pool}"),
+                "trade_url": trade_url(&dex, network, address, pool),
             }));
         }
     }
@@ -984,7 +1034,8 @@ async fn refresh_asset(db: &PgPool, a: &Asset) -> Result<()> {
                 volume: v.volume_24h_usd,
                 pools: json!([{ "name": v.pair, "dex": "hyperliquid", "liquidity_usd": null,
                                 "volume_24h_usd": v.volume_24h_usd,
-                                "url": "https://app.hyperliquid.xyz/trade/UZEC/USDC" }]),
+                                "url": "https://app.hyperliquid.xyz/trade/UZEC/USDC",
+                                "trade_url": "https://app.hyperliquid.xyz/trade/UZEC/USDC" }]),
             })
         }
         _ => None,
@@ -1112,6 +1163,19 @@ mod tests {
     fn parses_token_units() {
         assert_eq!(units("0x2e8b", 2, true).unwrap(), 119.15);
         assert_eq!(units("14406857702356", 8, false).unwrap(), 144068.57702356);
+    }
+
+    #[test]
+    fn trade_links_open_the_dex_with_zec_as_output() {
+        assert_eq!(
+            trade_url("pancakeswap-v3-bsc", "bsc", "0xzec", "0xpool"),
+            "https://pancakeswap.finance/swap?chain=bsc&outputCurrency=0xzec"
+        );
+        assert_eq!(
+            trade_url("uniswap-bsc", "bsc", "0xzec", "0xpool"),
+            "https://app.uniswap.org/swap?chain=bnb&outputCurrency=0xzec"
+        );
+        assert!(trade_url("unknown-dex", "solana", "mint", "pool").ends_with("/solana/pools/pool"));
     }
 
     #[test]

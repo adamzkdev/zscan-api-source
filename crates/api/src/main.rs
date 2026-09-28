@@ -201,6 +201,8 @@ async fn main() -> Result<()> {
         .route("/protocols", get(routes::protocols::list))
         .route("/protocols/{slug}", get(routes::protocols::detail))
         .route("/bridges", get(routes::bridges::overview))
+        .route("/bridges/events", get(routes::bridges::events))
+        .route("/bridges/flows", get(routes::bridges::flows))
         .route("/inscriptions", get(routes::inscriptions::list))
         .route("/inscriptions/stats", get(routes::inscriptions::stats))
         .route("/inscriptions/{id}", get(routes::inscriptions::detail))
