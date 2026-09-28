@@ -6,6 +6,7 @@ pub mod fees;
 pub mod inscriptions;
 pub mod labels;
 pub mod network;
+pub mod news;
 pub mod nft;
 pub mod pools;
 pub mod price;

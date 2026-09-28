@@ -1,0 +1,16 @@
+{
+  "description": "Zcash news sources aggregated by ZScan (api.zscan.cash/v1/news, news.zscan.cash). Official blogs, the community forum, ecosystem digests and software releases, all public RSS/Atom feeds. Items link to their source; ZScan stores the title and a short excerpt only. Earlier entries win when two feeds carry the same link. PRs welcome.",
+  "sources": [
+    { "id": "zcash-foundation", "name": "Zcash Foundation", "category": "development", "homepage": "https://zfnd.org", "feed": "https://zfnd.org/feed/" },
+    { "id": "shielded-labs", "name": "Shielded Labs", "category": "development", "homepage": "https://shieldedlabs.net", "feed": "https://shieldedlabs.net/feed/" },
+    { "id": "ecc", "name": "Electric Coin Co.", "category": "development", "homepage": "https://electriccoin.co", "feed": "https://electriccoin.co/feed/" },
+    { "id": "zcg", "name": "Zcash Community Grants", "category": "grants", "homepage": "https://forum.zcashcommunity.com/c/grants/33", "feed": "https://forum.zcashcommunity.com/c/grants/33.rss" },
+    { "id": "zechub", "name": "ZecHub", "category": "community", "homepage": "https://zechub.substack.com", "feed": "https://zechub.substack.com/feed" },
+    { "id": "forum", "name": "Zcash Community Forum", "category": "community", "homepage": "https://forum.zcashcommunity.com", "feed": "https://forum.zcashcommunity.com/latest.rss" },
+    { "id": "zebra", "name": "Zebra", "category": "releases", "homepage": "https://github.com/ZcashFoundation/zebra", "feed": "https://github.com/ZcashFoundation/zebra/releases.atom", "exclude": ["zebra-", "-rc"] },
+    { "id": "zaino", "name": "Zaino", "category": "releases", "homepage": "https://github.com/zingolabs/zaino", "feed": "https://github.com/zingolabs/zaino/releases.atom", "title_prefix": "Zaino ", "exclude": ["-rc", "zainod-", "backup/"] },
+    { "id": "zallet", "name": "Zallet", "category": "releases", "homepage": "https://github.com/zcash/wallet", "feed": "https://github.com/zcash/wallet/releases.atom", "title_prefix": "Zallet ", "exclude": ["-rc"] },
+    { "id": "zashi-ios", "name": "Zashi iOS", "category": "releases", "homepage": "https://github.com/Electric-Coin-Company/zashi-ios", "feed": "https://github.com/Electric-Coin-Company/zashi-ios/releases.atom", "title_prefix": "Zashi iOS ", "exclude": ["-rc"] },
+    { "id": "zashi-android", "name": "Zashi Android", "category": "releases", "homepage": "https://github.com/Electric-Coin-Company/zashi-android", "feed": "https://github.com/Electric-Coin-Company/zashi-android/releases.atom", "title_prefix": "Zashi Android: ", "exclude": ["-rc"] }
+  ]
+}
