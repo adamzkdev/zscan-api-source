@@ -11,8 +11,8 @@ use utoipa::{
 
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
-    address, blocks, bridges, compact, fees, inscriptions, labels, market, network, news, nft,
-    pools, price, protocols, rankings, search, status, supply, tx, upgrades,
+    address, blocks, bridges, compact, decode, fees, inscriptions, labels, market, network, news,
+    nft, pools, price, protocols, rankings, search, status, supply, tx, upgrades,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -101,7 +101,7 @@ protocol makes public."#;
 #[openapi(
     info(title = "ZScan API", version = "1.1.0"),
     paths(
-        network::status, blocks::list, blocks::detail, tx::list, tx::detail, tx::broadcast,
+        network::status, blocks::list, blocks::detail, tx::list, tx::detail, tx::broadcast, decode::tx, decode::address,
         address::detail, address::csv, address::unified, search::search,
         pools::current, pools::history, pools::migration,
         supply::supply, supply::audit, supply::funding, supply::anonymity,

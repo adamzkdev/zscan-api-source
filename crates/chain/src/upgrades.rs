@@ -101,6 +101,8 @@ pub struct UpgradeInfo {
     pub activation_height: Option<u32>,
     /// Target block spacing once active, in seconds.
     pub target_block_time: u32,
+    /// Consensus branch ID signed into transactions (hex, as in `getblockchaininfo`).
+    pub branch_id: Option<String>,
 }
 
 /// Every upgrade from Overwinter on, with activation heights for this network.
@@ -122,6 +124,7 @@ pub fn upgrades() -> Vec<UpgradeInfo> {
                 name: u.to_string(),
                 activation_height: height,
                 target_block_time,
+                branch_id: u.branch_id().map(|b| b.to_string()),
             }
         })
         .collect()

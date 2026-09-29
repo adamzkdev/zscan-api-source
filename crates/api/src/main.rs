@@ -168,6 +168,8 @@ async fn main() -> Result<()> {
         .route("/txs", get(routes::tx::list))
         .route("/tx/{txid}", get(routes::tx::detail))
         .route("/tx/broadcast", post(routes::tx::broadcast))
+        .route("/decode/tx", post(routes::decode::tx))
+        .route("/decode/address/{address}", get(routes::decode::address))
         .route("/tx/{txid}/shielded", get(routes::compact::tx_outputs))
         .route("/compact", get(routes::compact::range))
         .route("/address/{address}", get(routes::address::detail))

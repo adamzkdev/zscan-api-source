@@ -27,6 +27,8 @@ pub struct Upgrade {
     pub announced_date: Option<&'static str>,
     /// Target seconds per block once active.
     pub target_block_time: u32,
+    /// Consensus branch ID (hex) that transactions sign for this upgrade.
+    pub branch_id: Option<String>,
     pub summary: Option<&'static str>,
 }
 
@@ -111,6 +113,7 @@ pub async fn list(State(s): State<AppState>) -> ApiResult<Upgrades> {
                 activated,
                 blocks_remaining: remaining,
                 target_block_time: u.target_block_time,
+                branch_id: u.branch_id,
                 label: label(&u.name),
                 name: u.name,
             }
