@@ -399,11 +399,51 @@ async fn healthcheck() -> Result<()> {
     Ok(())
 }
 
+/// Addresses of our own network: loopback, RFC 1918, carrier-grade NAT (100.64.0.0/10, used by
+/// some private networks), link-local, IPv6 unique-local and link-local. IPv4-mapped IPv6
+/// addresses (`::ffff:a.b.c.d`, what a dual-stack listener reports) count as their IPv4.
 fn is_internal(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
-        IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || (a == 100 && (b & 0xc0) == 64)
+        }
+        IpAddr::V6(v6) => {
+            let s0 = v6.segments()[0];
+            v6.is_loopback() || (s0 & 0xfe00) == 0xfc00 || (s0 & 0xffc0) == 0xfe80
+        }
     }
+}
+
+/// Whether a request carries our apps' shared token (`X-ZScan-Internal`, set from
+/// `INTERNAL_API_TOKEN`): server-side rendering from the explorer, stats, console and AI. Their
+/// requests are trusted like private-network ones, whatever address they arrive from.
+fn has_internal_token(headers: &HeaderMap) -> bool {
+    static TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let Some(expected) = TOKEN
+        .get_or_init(|| {
+            std::env::var("INTERNAL_API_TOKEN")
+                .ok()
+                .filter(|t| t.len() >= 16)
+        })
+        .as_deref()
+    else {
+        return false;
+    };
+    headers
+        .get("x-zscan-internal")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|got| {
+            got.len() == expected.len()
+                && got
+                    .bytes()
+                    .zip(expected.bytes())
+                    .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                    == 0
+        })
 }
 
 /// Lets browsers and CDNs reuse successful GET responses briefly. Data changes at most once per
@@ -429,8 +469,8 @@ async fn cache_control(req: Request, next: Next) -> Response {
 /// from our own reverse proxy / web container (a private address); anyone else could forge it.
 /// The last hop is the one appended by the proxy closest to us.
 fn client_ip(peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
-    if !is_internal(peer) {
-        return Some(peer);
+    if !is_internal(peer) && !has_internal_token(headers) {
+        return Some(peer.to_canonical());
     }
     headers
         .get("x-forwarded-for")
@@ -524,5 +564,24 @@ mod tests {
         let got = client_ip(proxy, &xff("1.2.3.4, 198.51.100.9"));
         assert_eq!(got, Some("198.51.100.9".parse().unwrap()));
         assert_eq!(client_ip(proxy, &HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn private_networks_are_internal() {
+        for ip in [
+            "10.1.2.3",
+            "100.64.0.9",
+            "100.127.255.1",
+            "::ffff:10.0.0.4",
+            "::ffff:100.100.1.1",
+            "fd12:3456::1",
+            "fe80::1",
+            "127.0.0.1",
+        ] {
+            assert!(is_internal(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["100.128.0.1", "8.8.8.8", "::ffff:8.8.8.8", "2001:db8::1"] {
+            assert!(!is_internal(ip.parse().unwrap()), "{ip}");
+        }
     }
 }

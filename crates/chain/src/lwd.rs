@@ -155,18 +155,22 @@ impl Lwd {
             .await?)
     }
 
-    /// Fetches a single compact block with transparent data.
+    /// Fetches a single compact block with transparent data. Servers can trail the tip by a
+    /// block: one that doesn't have it yet answers "out of range" (while streaming), so each
+    /// server is tried before the block counts as not there.
     pub async fn block(&self, height: u32) -> Result<Option<CompactBlock>> {
-        let mut s = match self.block_range(height, height).await {
-            Ok(s) => s,
-            Err(e) => {
-                if is_not_found(&e) {
-                    return Ok(None);
-                }
-                return Err(e);
+        for _ in 0..self.clients.len() {
+            let fetched = match self.block_range(height, height).await {
+                Ok(mut s) => s.message().await.map_err(anyhow::Error::from),
+                Err(e) => Err(e),
+            };
+            match fetched {
+                Ok(b) => return Ok(b),
+                Err(e) if is_not_found(&e) => continue,
+                Err(e) => return Err(e),
             }
-        };
-        Ok(s.message().await?)
+        }
+        Ok(None)
     }
 
     /// Fetches a raw transaction by display-order txid. Returns bytes and the mined height
