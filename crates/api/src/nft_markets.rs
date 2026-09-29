@@ -24,6 +24,8 @@ const ZILKROAD: &str = "https://zilkroad.com";
 const SNAPSHOT_EVERY: Duration = Duration::from_secs(300);
 /// Pause between item reads of the one-time history import and the picture warm-up.
 const BACKFILL_PAUSE: Duration = Duration::from_millis(400);
+/// How many of an item's most recent events its page shows.
+const MAX_ITEM_EVENTS: usize = 200;
 
 fn client() -> &'static reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
@@ -815,12 +817,14 @@ pub async fn item(p: &Project, id: &str) -> Option<VenueItemDetail> {
                 .collect()
         })
         .unwrap_or_default();
-    let history = v
+    // The venue lists events oldest first: keep the most recent ones.
+    let events = v
         .get("history")
         .and_then(|h| h.as_array())
-        .into_iter()
-        .flatten()
-        .take(50)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let history = events[events.len().saturating_sub(MAX_ITEM_EVENTS)..]
+        .iter()
         .map(|e| VenueEvent {
             kind: e
                 .get("type")
