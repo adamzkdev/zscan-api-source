@@ -2,6 +2,7 @@
 //! records value-pool snapshots and tracks the mempool.
 
 mod alerts;
+mod treasuries;
 
 use std::time::Duration;
 
@@ -147,6 +148,10 @@ async fn main() -> Result<()> {
     let alerts = tokio::spawn(supervise("alerts", move || {
         alerts::run(ctx.db.clone()).boxed()
     }));
+    let treasuries = tokio::spawn(supervise("treasuries", {
+        let lag = cfg.inscriptions_lag;
+        move || treasuries::run(ctx, lag).boxed()
+    }));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
         move || retention(ctx, days).boxed()
@@ -166,6 +171,7 @@ async fn main() -> Result<()> {
         inscriptions,
         nft_enrich,
         alerts,
+        treasuries,
         retention
     );
     Ok(())

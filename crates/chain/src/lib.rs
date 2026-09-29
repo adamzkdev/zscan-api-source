@@ -3,6 +3,7 @@
 pub mod address;
 pub mod bridges;
 pub mod classify;
+pub mod compact;
 pub mod consts;
 pub mod economics;
 pub mod hash;
@@ -17,6 +18,7 @@ pub mod parse;
 pub mod resolve;
 pub mod rpc;
 pub mod supabase;
+pub mod treasuries;
 pub mod unified;
 pub mod upgrades;
 

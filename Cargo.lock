@@ -3387,6 +3387,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5360,6 +5371,7 @@ dependencies = [
  "tracing-subscriber",
  "zscan-chain",
  "zscan-db",
+ "zscan-wasm",
 ]
 
 [[package]]
@@ -5369,4 +5381,24 @@ dependencies = [
  "anyhow",
  "tokio",
  "zscan-chain",
+]
+
+[[package]]
+name = "zscan-wasm"
+version = "0.1.0"
+source = "git+https://github.com/adamzkdev/zscan?rev=610d5725734de5e031a26aeefdcb69f5642aa8f2#610d5725734de5e031a26aeefdcb69f5642aa8f2"
+dependencies = [
+ "bech32",
+ "getrandom 0.2.17",
+ "hex",
+ "orchard",
+ "sapling-crypto",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+ "zcash_address",
+ "zcash_note_encryption",
+ "zcash_protocol",
+ "zip32",
 ]

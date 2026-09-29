@@ -12,7 +12,7 @@ use utoipa::{
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
     address, blocks, bridges, compact, decode, fees, inscriptions, labels, market, network, news,
-    nft, pools, price, protocols, rankings, search, status, supply, tx, upgrades,
+    nft, pools, price, protocols, rankings, search, status, supply, treasuries, tx, upgrades,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -111,7 +111,7 @@ protocol makes public."#;
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
         inscriptions::image, inscriptions::by_address,
         nft::collections, nft::collection, nft::collection_stats, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
-        nft::sales, news::list, news::sources,
+        nft::sales, news::list, news::sources, treasuries::list, treasuries::detail,
         market::overview, market::daily, market::coins, market::assets, market::assets_daily,
         crate::ws::handler,
     ),
@@ -130,6 +130,7 @@ protocol makes public."#;
         (name = "inscriptions", description = "Inscriptions (Zerdinals) inscribed in transparent scriptSigs: on-chain images and files, ZRC-721 collections and IPFS NFTs. Ownership follows transparent outputs; spending into a shielded transaction ends tracking. Token documents (ZRC-20) are numbered but not indexed."),
         (name = "labels", description = "Address name tags, each with a verifiable source."),
         (name = "shielded", description = "Compact blocks and full note ciphertexts for client-side scanning with a viewing key. Keys never reach the server."),
+        (name = "treasuries", description = "Shielded accounts made public by their owners with a viewing key: balance, inflows, outflows and memos. Shown at proof.zscan.cash."),
     )
 )]
 struct ApiDoc;

@@ -246,6 +246,8 @@ async fn main() -> Result<()> {
             get(routes::nft::artwork_image),
         )
         .route("/nft-sales", get(routes::nft::sales))
+        .route("/treasuries", get(routes::treasuries::list))
+        .route("/treasuries/{slug}", get(routes::treasuries::detail))
         .route("/ws", get(ws::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));

@@ -17,6 +17,7 @@ pub mod rankings;
 pub mod search;
 pub mod status;
 pub mod supply;
+pub mod treasuries;
 pub mod tx;
 pub mod upgrades;
 

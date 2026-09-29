@@ -19,3 +19,5 @@ chrono.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# The viewing-key scanner the browser runs (repo zscan, wasm/), used natively for treasuries.
+zscan-wasm = { git = "https://github.com/adamzkdev/zscan", rev = "610d5725734de5e031a26aeefdcb69f5642aa8f2" }
