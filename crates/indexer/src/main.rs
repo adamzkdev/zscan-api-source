@@ -1,6 +1,8 @@
 //! ZScan indexer: follows the chain tip, backfills history down to a start height,
 //! records value-pool snapshots and tracks the mempool.
 
+mod alerts;
+
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -142,6 +144,9 @@ async fn main() -> Result<()> {
         let on = cfg.inscriptions;
         move || nft_enrich(ctx, on).boxed()
     }));
+    let alerts = tokio::spawn(supervise("alerts", move || {
+        alerts::run(ctx.db.clone()).boxed()
+    }));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
         move || retention(ctx, days).boxed()
@@ -160,6 +165,7 @@ async fn main() -> Result<()> {
         bridges,
         inscriptions,
         nft_enrich,
+        alerts,
         retention
     );
     Ok(())

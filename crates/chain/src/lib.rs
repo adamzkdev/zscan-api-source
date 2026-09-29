@@ -12,6 +12,7 @@ pub mod limiter;
 pub mod lwd;
 pub mod miner;
 pub mod nft_projects;
+pub mod notify;
 pub mod parse;
 pub mod resolve;
 pub mod rpc;

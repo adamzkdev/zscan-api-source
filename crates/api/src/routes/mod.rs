@@ -1,3 +1,4 @@
+pub mod account;
 pub mod address;
 pub mod blocks;
 pub mod bridges;

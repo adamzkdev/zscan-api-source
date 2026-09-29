@@ -29,3 +29,5 @@ axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 governor = "0.8"
+sha2 = "0.10"
+getrandom = "0.2"
