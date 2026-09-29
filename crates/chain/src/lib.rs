@@ -16,6 +16,7 @@ pub mod notify;
 pub mod parse;
 pub mod resolve;
 pub mod rpc;
+pub mod supabase;
 pub mod unified;
 pub mod upgrades;
 

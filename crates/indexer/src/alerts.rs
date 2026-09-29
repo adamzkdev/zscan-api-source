@@ -1,17 +1,65 @@
-//! Watchlist alerts: after each block, every watched transparent address that received or sent
-//! ZEC gets one alert per transaction, by email (Resend) and Telegram. The Telegram bot's
-//! `/start <code>` links a chat to an account.
+//! Watchlist alerts. Watchlists live in Supabase (the ZScan console); after each block, every
+//! watched transparent address that received or sent ZEC gets one alert per transaction, stored
+//! in Supabase and sent by email (Resend) and Telegram. The Telegram bot's `/start <code>` links a
+//! chat to an account.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use zscan_chain::notify::{html_escape, Mailer, Telegram};
+use zscan_chain::supabase::Supabase;
 use zscan_db::{sqlx, Db};
 
 /// Blocks re-scanned behind the cursor: inputs resolved late and small reorgs still alert, and
-/// an alert is never sent twice (one per watched address and transaction).
+/// an alert is never stored twice (one per watched address and transaction).
 const RESCAN: i64 = 10;
+
+#[derive(Debug, Clone, Deserialize)]
+struct Watch {
+    id: i64,
+    user_id: String,
+    address: String,
+    label: Option<String>,
+    notify_in: bool,
+    notify_out: bool,
+    min_zat: i64,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct NewAlert<'a> {
+    watch_id: i64,
+    user_id: &'a str,
+    address: &'a str,
+    txid: String,
+    height: i32,
+    direction: &'static str,
+    amount: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlertRow {
+    id: i64,
+    watch_id: i64,
+    user_id: String,
+    address: String,
+    txid: String,
+    height: i32,
+    direction: String,
+    amount: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct Profile {
+    id: String,
+    email: Option<String>,
+    email_alerts: bool,
+    telegram_chat_id: Option<i64>,
+}
 
 fn zec(zat: i64) -> String {
     let s = format!("{:.8}", zat.abs() as f64 / 1e8);
@@ -26,238 +74,254 @@ fn short(a: &str) -> String {
     }
 }
 
-struct Pending {
-    id: i64,
-    address: String,
-    label: Option<String>,
-    txid: String,
-    height: i32,
-    direction: String,
-    amount: i64,
-    email: String,
-    email_alerts: bool,
-    chat: Option<i64>,
+struct Ctx {
+    db: Db,
+    sb: Supabase,
+    http: reqwest::Client,
+    mailer: Option<Mailer>,
+    telegram: Option<Telegram>,
+    explorer: String,
+    console: String,
 }
 
 pub async fn run(db: Db) -> Result<()> {
-    let mailer = Mailer::from_env();
-    let telegram = Telegram::from_env();
-    if mailer.is_none() && telegram.is_none() {
-        info!("alerts off: set RESEND_API_KEY and/or TELEGRAM_BOT_TOKEN");
-    }
-    let explorer = std::env::var("EXPLORER_URL")
-        .unwrap_or_else(|_| "https://zscan.cash".into())
-        .trim_end_matches('/')
-        .to_string();
-    let console = std::env::var("CONSOLE_URL")
-        .unwrap_or_else(|_| "https://console.zscan.cash".into())
-        .trim_end_matches('/')
-        .to_string();
     let http = zscan_chain::http_client_builder()
         .timeout(Duration::from_secs(20))
         .user_agent("zscan/0.1")
         .build()?;
-    if let Some(tg) = telegram.clone() {
-        tokio::spawn(bot(db.clone(), http.clone(), tg));
+    let Some(sb) = Supabase::from_env(http.clone()) else {
+        info!("alerts off: set SUPABASE_URL and SUPABASE_SECRET_KEY");
+        return Ok(());
+    };
+    let env = |k: &str, d: &str| {
+        std::env::var(k)
+            .unwrap_or_else(|_| d.into())
+            .trim_end_matches('/')
+            .to_string()
+    };
+    let ctx = Ctx {
+        db,
+        sb,
+        http,
+        mailer: Mailer::from_env(),
+        telegram: Telegram::from_env(),
+        explorer: env("EXPLORER_URL", "https://zscan.cash"),
+        console: env("CONSOLE_URL", "https://console.zscan.cash"),
+    };
+    if ctx.mailer.is_none() && ctx.telegram.is_none() {
+        info!("alert delivery off: set RESEND_API_KEY and/or TELEGRAM_BOT_TOKEN");
     }
-
+    if let Some(tg) = ctx.telegram.clone() {
+        tokio::spawn(bot(
+            ctx.db.clone(),
+            ctx.sb.clone(),
+            ctx.http.clone(),
+            tg,
+            ctx.console.clone(),
+        ));
+    }
     loop {
-        if let Err(e) = scan(&db).await {
+        if let Err(e) = scan(&ctx).await {
             warn!("alert scan: {e:#}");
-        }
-        if let Err(e) = deliver(
-            &db,
-            &http,
-            mailer.as_ref(),
-            telegram.as_ref(),
-            &explorer,
-            &console,
-        )
-        .await
-        {
-            warn!("alert delivery: {e:#}");
         }
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
 }
 
-/// Records alerts for blocks since the cursor. The first run starts at the tip: no alerts for
-/// history.
-async fn scan(db: &Db) -> Result<()> {
+/// Stores alerts for blocks since the cursor and delivers the new ones. The first run starts at
+/// the tip: no alerts for history.
+async fn scan(ctx: &Ctx) -> Result<()> {
     let Some(tip): Option<i32> = sqlx::query_scalar("SELECT max(height) FROM blocks")
-        .fetch_one(&db.pool)
+        .fetch_one(&ctx.db.pool)
         .await?
     else {
         return Ok(());
     };
     let cursor: Option<i64> =
         sqlx::query_scalar("SELECT value FROM job_cursors WHERE job = 'alerts'")
-            .fetch_optional(&db.pool)
+            .fetch_optional(&ctx.db.pool)
             .await?;
-    let from = match cursor {
-        Some(c) => c - RESCAN,
-        None => i64::from(tip),
-    };
-    let inserted = sqlx::query(
-        "INSERT INTO alerts (watch_id, user_id, address, txid, height, direction, amount)
-         SELECT w.id, w.user_id, w.address, x.txid, x.height,
-                CASE WHEN x.delta >= 0 THEN 'in' ELSE 'out' END, x.delta
-         FROM watchlist w
-         JOIN LATERAL (
-             SELECT m.txid, t.height, t.time, sum(m.delta)::bigint AS delta FROM (
-                 SELECT txid, value AS delta FROM tx_outputs WHERE address = w.address
+    // Nothing new since the last pass: skip the Supabase round-trip.
+    if cursor == Some(i64::from(tip)) {
+        return Ok(());
+    }
+    let from = cursor.map_or(i64::from(tip), |c| c - RESCAN);
+
+    let watches: Vec<Watch> = ctx
+        .sb
+        .select(
+            "watchlist",
+            "select=id,user_id,address,label,notify_in,notify_out,min_zat,created_at&limit=100000",
+        )
+        .await?;
+    // TEX addresses pay the ordinary P2PKH script, which is what the chain index holds.
+    let mut by_address: HashMap<String, Vec<&Watch>> = HashMap::new();
+    for w in &watches {
+        let chain =
+            zscan_chain::parse::tex_to_p2pkh(&w.address).unwrap_or_else(|| w.address.clone());
+        by_address.entry(chain).or_default().push(w);
+    }
+    let mut new = Vec::new();
+    if !by_address.is_empty() {
+        let addresses: Vec<String> = by_address.keys().cloned().collect();
+        let moves: Vec<(String, String, i32, DateTime<Utc>, i64)> = sqlx::query_as(
+            "SELECT m.address, m.txid, t.height, t.time, sum(m.delta)::bigint FROM (
+                 SELECT address, txid, value AS delta FROM tx_outputs WHERE address = ANY($1)
                  UNION ALL
-                 SELECT txid, -value FROM tx_inputs WHERE address = w.address AND value IS NOT NULL
+                 SELECT address, txid, -value FROM tx_inputs WHERE address = ANY($1) AND value IS NOT NULL
              ) m JOIN transactions t ON t.txid = m.txid
-             WHERE t.height > $1 AND t.height <= $2
-             GROUP BY m.txid, t.height, t.time
-         ) x ON true
-         WHERE x.delta <> 0 AND abs(x.delta) >= w.min_zat
-           AND ((x.delta > 0 AND w.notify_in) OR (x.delta < 0 AND w.notify_out))
-           -- Nothing from before the address was added (the re-scan window reaches back).
-           AND x.time > w.created_at - interval '2 minutes'
-         ON CONFLICT (watch_id, txid) DO NOTHING",
-    )
-    .bind(from as i32)
-    .bind(tip)
-    .execute(&db.pool)
-    .await?
-    .rows_affected();
+             WHERE t.height > $2 AND t.height <= $3
+             GROUP BY m.address, m.txid, t.height, t.time",
+        )
+        .bind(&addresses)
+        .bind(from as i32)
+        .bind(tip)
+        .fetch_all(&ctx.db.pool)
+        .await?;
+        for (address, txid, height, time, delta) in moves {
+            for w in by_address.get(&address).into_iter().flatten() {
+                let wanted = (delta > 0 && w.notify_in) || (delta < 0 && w.notify_out);
+                // Nothing from before the address was added (the re-scan reaches back).
+                let before = time < w.created_at - chrono::Duration::minutes(2);
+                if !wanted || before || delta.abs() < w.min_zat {
+                    continue;
+                }
+                new.push(NewAlert {
+                    watch_id: w.id,
+                    user_id: &w.user_id,
+                    address: &w.address,
+                    txid: txid.clone(),
+                    height,
+                    direction: if delta > 0 { "in" } else { "out" },
+                    amount: delta,
+                });
+            }
+        }
+    }
+    let inserted: Vec<AlertRow> = ctx.sb.insert_new("alerts", "watch_id,txid", &new).await?;
     sqlx::query(
         "INSERT INTO job_cursors (job, value) VALUES ('alerts', $1)
          ON CONFLICT (job) DO UPDATE SET value = GREATEST(job_cursors.value, $1)",
     )
     .bind(i64::from(tip))
-    .execute(&db.pool)
+    .execute(&ctx.db.pool)
     .await?;
-    if inserted > 0 {
-        info!(inserted, tip, "watchlist alerts");
+    if !inserted.is_empty() {
+        info!(alerts = inserted.len(), tip, "watchlist alerts");
+        let labels: HashMap<i64, Option<String>> =
+            watches.iter().map(|w| (w.id, w.label.clone())).collect();
+        deliver(ctx, &inserted, &labels).await?;
     }
     Ok(())
 }
 
-/// Sends alerts not delivered yet on each channel the user has on (one try per channel; a
-/// failure is recorded and not retried, so a bad address never loops).
+/// Sends each alert on the channels its owner has on (one try per channel) and records the
+/// outcome on the alert.
 async fn deliver(
-    db: &Db,
-    http: &reqwest::Client,
-    mailer: Option<&Mailer>,
-    telegram: Option<&Telegram>,
-    explorer: &str,
-    console: &str,
+    ctx: &Ctx,
+    alerts: &[AlertRow],
+    labels: &HashMap<i64, Option<String>>,
 ) -> Result<()> {
-    let rows: Vec<(
-        i64,
-        String,
-        Option<String>,
-        String,
-        i32,
-        String,
-        i64,
-        String,
-        bool,
-        Option<i64>,
-    )> = sqlx::query_as(
-        "SELECT a.id, a.address, w.label, a.txid, a.height, a.direction, a.amount,
-                    u.email, u.email_alerts, u.telegram_chat_id
-             FROM alerts a JOIN watchlist w ON w.id = a.watch_id JOIN users u ON u.id = a.user_id
-             WHERE a.email_sent_at IS NULL AND a.telegram_sent_at IS NULL AND a.error IS NULL
-               AND a.created_at > now() - interval '1 hour'
-             ORDER BY a.id LIMIT 100",
-    )
-    .fetch_all(&db.pool)
-    .await?;
-    for r in rows {
-        let p = Pending {
-            id: r.0,
-            address: r.1,
-            label: r.2,
-            txid: r.3,
-            height: r.4,
-            direction: r.5,
-            amount: r.6,
-            email: r.7,
-            email_alerts: r.8,
-            chat: r.9,
+    let mut ids: Vec<&str> = alerts.iter().map(|a| a.user_id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let profiles: Vec<Profile> = ctx
+        .sb
+        .select(
+            "profiles",
+            &format!(
+                "select=id,email,email_alerts,telegram_chat_id&id=in.({})",
+                ids.join(",")
+            ),
+        )
+        .await?;
+    let profiles: HashMap<&str, &Profile> = profiles.iter().map(|p| (p.id.as_str(), p)).collect();
+
+    for a in alerts {
+        let Some(p) = profiles.get(a.user_id.as_str()) else {
+            continue;
         };
-        let name = p.label.clone().unwrap_or_else(|| short(&p.address));
-        let verb = if p.direction == "in" {
+        let name = labels
+            .get(&a.watch_id)
+            .cloned()
+            .flatten()
+            .unwrap_or_else(|| short(&a.address));
+        let verb = if a.direction == "in" {
             "received"
         } else {
             "sent"
         };
-        let tx_url = format!("{explorer}/tx/{}", p.txid);
-        let addr_url = format!("{explorer}/address/{}", p.address);
+        let tx_url = format!("{}/tx/{}", ctx.explorer, a.txid);
         let mut errors = Vec::new();
-        let mut email_ok = false;
-        let mut tg_ok = false;
+        let (mut email_ok, mut tg_ok) = (false, false);
 
-        if let (Some(m), true) = (mailer, p.email_alerts) {
-            let subject = format!("{name} {verb} {} ZEC", zec(p.amount));
+        if let (Some(m), true, Some(to)) = (&ctx.mailer, p.email_alerts, &p.email) {
+            let subject = format!("{name} {verb} {} ZEC", zec(a.amount));
             let text = format!(
-                "{name} ({}) {verb} {} ZEC in block {}.\n\nTransaction: {tx_url}\nAddress: {addr_url}\n\nManage alerts: {console}/watchlist",
-                p.address,
-                zec(p.amount),
-                p.height
+                "{name} ({}) {verb} {} ZEC in block {}.\n\nTransaction: {tx_url}\n\nManage alerts: {}/watchlist",
+                a.address,
+                zec(a.amount),
+                a.height,
+                ctx.console
             );
             let html = format!(
                 r#"<div style="font-family:system-ui,sans-serif;max-width:520px;margin:auto;padding:24px;color:#121a2b">
-<p style="font-size:18px;font-weight:600;margin:0 0 8px">{n} {v} {a} ZEC</p>
+<p style="font-size:18px;font-weight:600;margin:0 0 8px">{n} {v} {amt} ZEC</p>
 <p style="color:#5b6780;margin:0 0 16px;word-break:break-all">{addr} · block {h}</p>
 <p><a href="{tx}" style="display:inline-block;background:#f4b728;color:#1a1405;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">View transaction</a></p>
 <p style="color:#8a95aa;font-size:12px">You get this because the address is on your ZScan watchlist. <a href="{c}/watchlist" style="color:#0b6bcb">Manage alerts</a></p></div>"#,
                 n = html_escape(&name),
                 v = verb,
-                a = zec(p.amount),
-                addr = html_escape(&p.address),
-                h = p.height,
+                amt = zec(a.amount),
+                addr = html_escape(&a.address),
+                h = a.height,
                 tx = html_escape(&tx_url),
-                c = html_escape(console),
+                c = html_escape(&ctx.console),
             );
-            match m.send(http, &p.email, &subject, &text, &html).await {
+            match m.send(&ctx.http, to, &subject, &text, &html).await {
                 Ok(()) => email_ok = true,
                 Err(e) => errors.push(format!("email: {e:#}")),
             }
         }
-        if let (Some(tg), Some(chat)) = (telegram, p.chat) {
+        if let (Some(tg), Some(chat)) = (&ctx.telegram, p.telegram_chat_id) {
             let msg = format!(
                 "{} <b>{}</b> {verb} <b>{} ZEC</b>\n<code>{}</code> · block {}\n<a href=\"{}\">View transaction</a>",
-                if p.direction == "in" { "⬇️" } else { "⬆️" },
+                if a.direction == "in" { "⬇️" } else { "⬆️" },
                 html_escape(&name),
-                zec(p.amount),
-                html_escape(&p.address),
-                p.height,
+                zec(a.amount),
+                html_escape(&a.address),
+                a.height,
                 html_escape(&tx_url)
             );
-            match tg.send(http, chat, &msg).await {
+            match tg.send(&ctx.http, chat, &msg).await {
                 Ok(()) => tg_ok = true,
                 Err(e) => errors.push(format!("telegram: {e:#}")),
             }
         }
-        let error = if !email_ok && !tg_ok && errors.is_empty() {
-            Some("no channel on".to_string())
-        } else if errors.is_empty() {
-            None
-        } else {
-            Some(errors.join("; "))
+        let now = Utc::now();
+        let error = match (email_ok || tg_ok, errors.is_empty()) {
+            (false, true) => Some("no channel on".to_string()),
+            (_, false) => Some(errors.join("; ")),
+            (true, true) => None,
         };
-        sqlx::query(
-            "UPDATE alerts SET email_sent_at = CASE WHEN $2 THEN now() END,
-                telegram_sent_at = CASE WHEN $3 THEN now() END, error = $4 WHERE id = $1",
-        )
-        .bind(p.id)
-        .bind(email_ok)
-        .bind(tg_ok)
-        .bind(error)
-        .execute(&db.pool)
-        .await?;
+        ctx.sb
+            .update(
+                "alerts",
+                &format!("id=eq.{}", a.id),
+                &serde_json::json!({
+                    "email_sent_at": email_ok.then_some(now),
+                    "telegram_sent_at": tg_ok.then_some(now),
+                    "error": error,
+                }),
+            )
+            .await?;
     }
     Ok(())
 }
 
 /// The Telegram bot: `/start <code>` links the chat to the account that made the code, `/stop`
 /// unlinks it.
-async fn bot(db: Db, http: reqwest::Client, tg: Telegram) {
+async fn bot(db: Db, sb: Supabase, http: reqwest::Client, tg: Telegram, console: String) {
     let mut offset: i64 =
         sqlx::query_scalar("SELECT value FROM job_cursors WHERE job = 'telegram'")
             .fetch_optional(&db.pool)
@@ -281,7 +345,13 @@ async fn bot(db: Db, http: reqwest::Client, tg: Telegram) {
             let chat = m.chat.id;
             let username = m.from.and_then(|f| f.username);
             let reply = if let Some(code) = text.strip_prefix("/start ").map(str::trim) {
-                match link(&db, code, chat, username.as_deref()).await {
+                let linked: Result<Option<String>> = sb
+                    .rpc(
+                        "telegram_link",
+                        &serde_json::json!({"link_code": code, "chat": chat, "username": username}),
+                    )
+                    .await;
+                match linked {
                     Ok(Some(email)) => format!(
                         "✅ Connected to the ZScan account <b>{}</b>. Alerts for your watchlist will arrive here.",
                         html_escape(&email)
@@ -293,15 +363,18 @@ async fn bot(db: Db, http: reqwest::Client, tg: Telegram) {
                     }
                 }
             } else if text.starts_with("/stop") {
-                let _ = sqlx::query(
-                    "UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE telegram_chat_id = $1",
-                )
-                .bind(chat)
-                .execute(&db.pool)
-                .await;
+                let _ = sb
+                    .update(
+                        "profiles",
+                        &format!("telegram_chat_id=eq.{chat}"),
+                        &serde_json::json!({"telegram_chat_id": null, "telegram_username": null}),
+                    )
+                    .await;
                 "Disconnected: no more ZScan alerts in this chat.".into()
             } else {
-                "I send alerts for your ZScan watchlist. Connect this chat from the console: https://console.zscan.cash/settings".into()
+                format!(
+                    "I send alerts for your ZScan watchlist. Connect this chat from the console: {console}/settings"
+                )
             };
             if let Err(e) = tg.send(&http, chat, &reply).await {
                 warn!("telegram reply: {e:#}");
@@ -315,28 +388,4 @@ async fn bot(db: Db, http: reqwest::Client, tg: Telegram) {
         .execute(&db.pool)
         .await;
     }
-}
-
-async fn link(db: &Db, code: &str, chat: i64, username: Option<&str>) -> Result<Option<String>> {
-    let user: Option<i64> = sqlx::query_scalar(
-        "DELETE FROM telegram_links WHERE code = $1 AND expires_at > now() RETURNING user_id",
-    )
-    .bind(code)
-    .fetch_optional(&db.pool)
-    .await?;
-    let Some(user) = user else { return Ok(None) };
-    // One account per chat: a chat linked elsewhere moves here.
-    sqlx::query("UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE telegram_chat_id = $1")
-        .bind(chat)
-        .execute(&db.pool)
-        .await?;
-    let email: String = sqlx::query_scalar(
-        "UPDATE users SET telegram_chat_id = $2, telegram_username = $3 WHERE id = $1 RETURNING email",
-    )
-    .bind(user)
-    .bind(chat)
-    .bind(username)
-    .fetch_one(&db.pool)
-    .await?;
-    Ok(Some(email))
 }

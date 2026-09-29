@@ -13,6 +13,7 @@ zscan-chain.workspace = true
 zscan-db.workspace = true
 tokio.workspace = true
 futures.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 anyhow.workspace = true

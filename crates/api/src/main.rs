@@ -22,7 +22,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, patch, post},
+    routing::{get, post},
     Json, Router,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
@@ -48,14 +48,8 @@ pub struct AppState {
     media_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     /// Caps concurrent WebSocket clients.
     pub ws_slots: Arc<Semaphore>,
-    /// API keys on public requests (own rate limit, usage counts).
+    /// API keys on public requests (own rate limit, usage counts), checked in Supabase.
     pub keys: accounts::Keys,
-    /// Sends console sign-in links (`RESEND_API_KEY`).
-    pub mailer: Option<zscan_chain::notify::Mailer>,
-    /// Where sign-in links point (`CONSOLE_URL`).
-    pub console_url: String,
-    /// Telegram bot username for alert links (`TELEGRAM_BOT_USERNAME`).
-    pub telegram_bot: Option<String>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -130,15 +124,10 @@ async fn main() -> Result<()> {
         broadcast_limiter,
         media_limiter,
         ws_slots,
-        keys: accounts::Keys::new(env_or("API_KEY_RATE_PER_SEC", "50").parse()?),
-        mailer: zscan_chain::notify::Mailer::from_env(),
-        console_url: env_or("CONSOLE_URL", "https://console.zscan.cash")
-            .trim_end_matches('/')
-            .to_string(),
-        telegram_bot: std::env::var("TELEGRAM_BOT_USERNAME")
-            .ok()
-            .map(|b| b.trim_start_matches('@').to_string())
-            .filter(|b| !b.is_empty()),
+        keys: accounts::Keys::new(
+            zscan_chain::supabase::Supabase::from_env(zscan_chain::http_client_builder().build()?),
+            env_or("API_KEY_RATE_PER_SEC", "50").parse()?,
+        ),
     };
     // Forget idle clients so the per-IP tables don't grow without bound.
     {
@@ -158,7 +147,7 @@ async fn main() -> Result<()> {
         });
     }
     tokio::spawn(ws::listen(state.clone()));
-    tokio::spawn(state.keys.clone().flush_loop(state.db.pool.clone()));
+    tokio::spawn(state.keys.clone().flush_loop());
     tokio::spawn(routes::rankings::refresh_accounts(state.clone()));
     tokio::spawn(refresh_nft_registry(state.http.clone()));
     if !zscan_chain::is_testnet() {
@@ -258,33 +247,6 @@ async fn main() -> Result<()> {
         )
         .route("/nft-sales", get(routes::nft::sales))
         .route("/ws", get(ws::handler))
-        .route("/account/login", post(routes::account::login))
-        .route("/account/verify", post(routes::account::verify))
-        .route("/account/logout", post(routes::account::logout))
-        .route(
-            "/account/me",
-            get(routes::account::me)
-                .patch(routes::account::update_me)
-                .delete(routes::account::delete_me),
-        )
-        .route(
-            "/account/keys",
-            get(routes::account::keys).post(routes::account::create_key),
-        )
-        .route("/account/keys/{id}", delete(routes::account::revoke_key))
-        .route(
-            "/account/watchlist",
-            get(routes::account::watchlist).post(routes::account::add_watch),
-        )
-        .route(
-            "/account/watchlist/{id}",
-            patch(routes::account::update_watch).delete(routes::account::remove_watch),
-        )
-        .route(
-            "/account/telegram",
-            post(routes::account::telegram_link).delete(routes::account::telegram_unlink),
-        )
-        .route("/account/alerts", get(routes::account::alerts))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));
 
@@ -448,17 +410,7 @@ fn is_internal(ip: IpAddr) -> bool {
 /// block, so a few seconds of staleness is invisible, and it absorbs bursts on hot endpoints.
 async fn cache_control(req: Request, next: Next) -> Response {
     let get = req.method() == axum::http::Method::GET;
-    // Account data is per user: never stored by shared caches.
-    let private =
-        req.uri().path().starts_with("/v1/account") || req.uri().path().starts_with("/account");
     let mut res = next.run(req).await;
-    if private {
-        res.headers_mut().insert(
-            axum::http::header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("private, no-store"),
-        );
-        return res;
-    }
     if get
         && res.status().is_success()
         && !res
@@ -504,8 +456,8 @@ async fn rate_limit(
     // Server-side rendering from our own web container arrives from a private address with no
     // forwarded client: it serves many visitors, so it isn't limited as one.
     // A request with an API key is limited per key (a higher quota) instead of per IP.
-    if let Some(key) = accounts::api_key(&headers) {
-        let id = match state.keys.lookup(&state.db.pool, key).await {
+    if let Some(key) = accounts::api_key(&headers).filter(|_| state.keys.enabled()) {
+        let id = match state.keys.lookup(key).await {
             Ok(Some(id)) => id,
             Ok(None) => {
                 return (
