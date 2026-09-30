@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/chain", "crates/db", "crates/indexer", "crates/api", "crates/verify"]
-# Its own workspace (it is also built for wasm32 in the explorer repo).
-exclude = ["crates/scanner"]
+members = ["crates/chain", "crates/db", "crates/indexer", "crates/api", "crates/verify", "crates/scanner"]
 
 [workspace.package]
 version = "0.1.0"

@@ -5,9 +5,8 @@ edition = "2021"
 license = "MIT"
 description = "Client-side viewing-key scanner for ZScan: trial-decrypts compact blocks in the browser."
 publish = false
-
-# Built for wasm32 on its own (scripts/build-wasm.sh), outside the server workspace.
-[workspace]
+# Copy of adamzkdev/zscan wasm/ (at 610d572) for the indexer's native use; the wasm32 build
+# stays in that repo. Keep the two in sync.
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -32,9 +31,3 @@ serde_json = "1"
 
 [dev-dependencies]
 rand_core = "0.6"
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
