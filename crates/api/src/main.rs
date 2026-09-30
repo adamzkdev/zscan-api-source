@@ -233,6 +233,11 @@ async fn main() -> Result<()> {
             "/collections/{slug}/stats",
             get(routes::nft::collection_stats),
         )
+        .route("/collections/{slug}/map", get(routes::nft::collection_map))
+        .route(
+            "/collections/{slug}/map/image",
+            get(routes::nft::collection_map_image),
+        )
         .route(
             "/collections/{slug}/items/{id}",
             get(routes::nft::venue_item),

@@ -913,6 +913,7 @@ async fn store_sales(db: &PgPool, project: &str, sales: &[RawSale]) -> Result<u6
 pub async fn archive(db: PgPool) {
     tokio::spawn(backfill(db.clone()));
     tokio::spawn(warm_images(db.clone()));
+    tokio::spawn(warm_atlases(db.clone()));
     loop {
         if let Err(e) = snapshot(&db).await {
             tracing::warn!("nft market snapshot: {e:#}");
@@ -1079,6 +1080,243 @@ async fn warm_images(db: PgPool) {
             }
         }
         tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+    }
+}
+
+/// Side of one picture in a collection's atlas, in pixels.
+pub const ATLAS_CELL: u32 = 32;
+/// Pictures per atlas row: item `n` sits at slot `n - 1`.
+pub const ATLAS_COLS: u32 = 100;
+/// How often a project's atlas checks for new pictures.
+const ATLAS_TTL: Duration = Duration::from_secs(3600);
+
+/// One trait type of a collection map, with every value it takes.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MapTrait {
+    pub trait_type: String,
+    pub values: Vec<String>,
+}
+
+/// Where each item's thumbnail sits in the atlas.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MapAtlas {
+    /// API path of the JPEG mosaic.
+    pub url: String,
+    pub cell: u32,
+    pub cols: u32,
+}
+
+/// One item of a collection map: `[id, rank, ask, bid, last, sales, volume, traits]`, amounts
+/// in zatoshis, `traits` holding one index into [`MapTrait::values`] per trait type (-1: none).
+pub type MapItem = (
+    u32,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    i64,
+    i64,
+    Vec<i32>,
+);
+
+/// A rarity band and what its items sold for lately: the reference a listing is compared to.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MapBand {
+    pub from_rank: i64,
+    pub to_rank: i64,
+    /// Median sale of the last 7 days, when the band had enough sales to trust it.
+    pub reference: Option<i64>,
+}
+
+/// Every item of an off-chain collection in one compact document, for the collection map.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CollectionMap {
+    pub supply: usize,
+    pub floor: Option<i64>,
+    /// A listing at least [`MIN_DISCOUNT`] under its band's reference is a deal, as in the
+    /// collection's analytics.
+    pub bands: Vec<MapBand>,
+    pub deal_discount: f64,
+    pub traits: Vec<MapTrait>,
+    #[schema(value_type = Vec<Vec<Object>>)]
+    pub items: Vec<MapItem>,
+    pub atlas: MapAtlas,
+}
+
+/// The map of an off-chain project; `sales` holds each item's archived `(count, volume)` and
+/// `recent` the `(item, price)` sales of the last 7 days.
+pub async fn map(
+    p: &Project,
+    sales: &HashMap<String, (i64, i64)>,
+    recent: &[(String, i64)],
+) -> Option<CollectionMap> {
+    if !is_zilkroad(p) {
+        return None;
+    }
+    let all = zilkroad_items().await?;
+    let mut types: BTreeMap<&str, BTreeMap<&str, i32>> = BTreeMap::new();
+    for i in all.iter() {
+        for t in &i.traits {
+            types.entry(&t.trait_type).or_default().insert(&t.value, 0);
+        }
+    }
+    for values in types.values_mut() {
+        for (n, v) in values.values_mut().enumerate() {
+            *v = n as i32;
+        }
+    }
+    let mut items: Vec<MapItem> = all
+        .iter()
+        .filter_map(|i| {
+            let id: u32 = i.id.parse().ok()?;
+            let traits = types
+                .iter()
+                .map(|(ty, values)| {
+                    i.trait_value(ty)
+                        .and_then(|v| values.get(v).copied())
+                        .unwrap_or(-1)
+                })
+                .collect();
+            let (count, volume) = sales.get(&i.id).copied().unwrap_or_default();
+            Some((id, i.rank, i.ask, i.bid, i.last, count, volume, traits))
+        })
+        .collect();
+    items.sort_unstable_by_key(|i| i.0);
+    let bands = book(p, recent)
+        .await
+        .tiers
+        .into_iter()
+        .map(|t| MapBand {
+            from_rank: t.from_rank,
+            to_rank: t.to_rank,
+            reference: t.median_7d.filter(|_| t.sales_7d >= MIN_COMPARABLES as i64),
+        })
+        .collect();
+    Some(CollectionMap {
+        supply: items.len(),
+        floor: all.iter().filter_map(|i| i.ask).min(),
+        bands,
+        deal_discount: MIN_DISCOUNT,
+        traits: types
+            .into_iter()
+            .map(|(ty, values)| MapTrait {
+                trait_type: ty.to_string(),
+                values: values.into_keys().map(str::to_string).collect(),
+            })
+            .collect(),
+        items,
+        atlas: MapAtlas {
+            url: format!("/v1/collections/{}/map/image", p.slug),
+            cell: ATLAS_CELL,
+            cols: ATLAS_COLS,
+        },
+    })
+}
+
+/// A JPEG mosaic of every stored picture of an off-chain project, [`ATLAS_CELL`] pixels each,
+/// item `n` at slot `n - 1`. Kept in memory only, and rebuilt when pictures were added.
+pub async fn atlas(db: &PgPool, p: &Project) -> Option<Arc<Vec<u8>>> {
+    type Entry = (Instant, i64, Arc<Vec<u8>>);
+    static CACHE: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
+    if !is_zilkroad(p) {
+        return None;
+    }
+    // Held while building, so concurrent visitors wait for one build.
+    let mut cache = CACHE.get_or_init(Default::default).lock().await;
+    if let Some((t, _, jpeg)) = cache.get(&p.slug) {
+        if t.elapsed() < ATLAS_TTL {
+            return Some(jpeg.clone());
+        }
+    }
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM nft_item_images WHERE project = $1")
+        .bind(&p.slug)
+        .fetch_one(db)
+        .await
+        .ok()?;
+    if let Some((t, n, jpeg)) = cache.get_mut(&p.slug) {
+        if *n == stored {
+            *t = Instant::now();
+            return Some(jpeg.clone());
+        }
+    }
+    let started = Instant::now();
+    let jpeg = build_atlas(db, &p.slug, p.supply.unwrap_or(0).max(1) as u32)
+        .await
+        .map_err(|e| tracing::warn!("atlas {}: {e:#}", p.slug))
+        .ok()?;
+    tracing::info!(
+        "atlas {}: {stored} pictures, {} KB in {:?}",
+        p.slug,
+        jpeg.len() / 1024,
+        started.elapsed()
+    );
+    let jpeg = Arc::new(jpeg);
+    cache.insert(p.slug.clone(), (Instant::now(), stored, jpeg.clone()));
+    Some(jpeg)
+}
+
+/// Pictures read and drawn per step: stored originals weigh up to ~60 KB each.
+const ATLAS_BATCH: i64 = 250;
+
+async fn build_atlas(db: &PgPool, project: &str, slots: u32) -> Result<Vec<u8>> {
+    use image::{imageops, Rgb, RgbImage};
+    let rows_n = slots.div_ceil(ATLAS_COLS);
+    let mut sheet = RgbImage::new(ATLAS_COLS * ATLAS_CELL, rows_n * ATLAS_CELL);
+    let mut after = String::new();
+    loop {
+        let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
+            "SELECT item, body FROM nft_item_images WHERE project = $1 AND item > $2
+             ORDER BY item LIMIT $3",
+        )
+        .bind(project)
+        .bind(&after)
+        .bind(ATLAS_BATCH)
+        .fetch_all(db)
+        .await?;
+        let Some((last, _)) = rows.last() else { break };
+        after = last.clone();
+        sheet = tokio::task::spawn_blocking(move || {
+            for (item, body) in &rows {
+                let Some(slot) = item.parse::<u32>().ok().and_then(|n| n.checked_sub(1)) else {
+                    continue;
+                };
+                let Ok(pic) = image::load_from_memory(body) else {
+                    continue;
+                };
+                if slot >= slots {
+                    continue;
+                }
+                let thumb = imageops::thumbnail(&pic.to_rgba8(), ATLAS_CELL, ATLAS_CELL);
+                let (x0, y0) = (
+                    (slot % ATLAS_COLS) * ATLAS_CELL,
+                    (slot / ATLAS_COLS) * ATLAS_CELL,
+                );
+                for (x, y, px) in thumb.enumerate_pixels() {
+                    // Transparent parts over black, like the collection's own background.
+                    let a = px[3] as u32;
+                    let c = |v: u8| (v as u32 * a / 255) as u8;
+                    sheet.put_pixel(x0 + x, y0 + y, Rgb([c(px[0]), c(px[1]), c(px[2])]));
+                }
+            }
+            sheet
+        })
+        .await?;
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 72).encode_image(&sheet)?;
+        Ok(out.into_inner())
+    })
+    .await?
+}
+
+/// Keeps every off-chain project's atlas built, so visitors never wait for one.
+async fn warm_atlases(db: PgPool) {
+    loop {
+        for p in nft_projects::projects().iter().filter(|p| is_zilkroad(p)) {
+            atlas(&db, p).await;
+        }
+        tokio::time::sleep(ATLAS_TTL).await;
     }
 }
 

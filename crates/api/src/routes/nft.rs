@@ -15,7 +15,8 @@ use zscan_chain::nft_projects::{self, Project};
 use super::inscriptions::{moderate, InscriptionRow, ROW_COLUMNS};
 use crate::error::{ApiError, ApiResult};
 use crate::nft_markets::{
-    self, Book, ItemFilter, TraitValue, VenueItem, VenueItemDetail, VenueSale, VenueStats,
+    self, Book, CollectionMap, ItemFilter, TraitValue, VenueItem, VenueItemDetail, VenueSale,
+    VenueStats,
 };
 use crate::{ipfs, AppState};
 
@@ -893,6 +894,57 @@ pub async fn venue_item_image(
             Ok((axum::http::StatusCode::BAD_GATEWAY, "Image unavailable").into_response())
         }
     }
+}
+
+/// Every item of a marketplace-kept collection in one compact document (ranks, prices, sales,
+/// traits and where each thumbnail sits in the atlas), for the collection map.
+#[utoipa::path(get, path = "/v1/collections/{slug}/map", params(("slug" = String, Path)),
+    responses((status = 200, body = CollectionMap), (status = 404)), tag = "inscriptions")]
+pub async fn collection_map(
+    State(s): State<AppState>,
+    Path(slug): Path<String>,
+) -> ApiResult<CollectionMap> {
+    let p = nft_projects::by_slug(&slug)
+        .ok_or_else(|| ApiError::NotFound(format!("Collection {slug} not found")))?;
+    let sales: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT item, count(*), sum(price)::bigint FROM nft_market_sales WHERE project = $1
+         GROUP BY item",
+    )
+    .bind(&p.slug)
+    .fetch_all(&s.db.pool)
+    .await?;
+    let sales = sales.into_iter().map(|(i, n, v)| (i, (n, v))).collect();
+    let recent = recent_archived(&s, &p.slug, 7).await?;
+    nft_markets::map(p, &sales, &recent)
+        .await
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("{} has no map", p.name)))
+}
+
+/// Thumbnails of every item of a marketplace-kept collection in one JPEG, 100 per row, item
+/// `n` at slot `n - 1` (see `atlas` in the map).
+#[utoipa::path(get, path = "/v1/collections/{slug}/map/image", params(("slug" = String, Path)),
+    responses((status = 200, description = "JPEG mosaic"), (status = 404)), tag = "inscriptions")]
+pub async fn collection_map_image(
+    State(s): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    let p = nft_projects::by_slug(&slug)
+        .ok_or_else(|| ApiError::NotFound(format!("Collection {slug} not found")))?;
+    let jpeg = nft_markets::atlas(&s.db.pool, p)
+        .await
+        .ok_or_else(|| ApiError::NotFound(format!("{} has no map", p.name)))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        jpeg.as_ref().clone(),
+    )
+        .into_response())
 }
 
 /// One UTC day of trading. Amounts in zatoshis.
