@@ -1,0 +1,40 @@
+[package]
+name = "zscan-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Client-side viewing-key scanner for ZScan: trial-decrypts compact blocks in the browser."
+publish = false
+
+# Built for wasm32 on its own (scripts/build-wasm.sh), outside the server workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+orchard = { version = "=0.15.5", default-features = false, features = ["std"] }
+sapling-crypto = { version = "=0.7.0", default-features = false, features = ["std"] }
+zcash_note_encryption = "=0.4.2"
+zcash_address = "=0.13.0"
+zcash_protocol = "=0.10.6"
+zip32 = "0.2"
+bech32 = "0.11"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+# Cargo.lock keeps 0.2.100, which must match wasm-bindgen-cli (scripts/build-wasm.sh).
+wasm-bindgen = "0.2.100"
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+rand_core = "0.6"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

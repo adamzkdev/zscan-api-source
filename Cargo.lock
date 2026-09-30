@@ -5462,7 +5462,6 @@ dependencies = [
 [[package]]
 name = "zscan-wasm"
 version = "0.1.0"
-source = "git+https://github.com/adamzkdev/zscan?rev=610d5725734de5e031a26aeefdcb69f5642aa8f2#610d5725734de5e031a26aeefdcb69f5642aa8f2"
 dependencies = [
  "bech32",
  "getrandom 0.2.17",

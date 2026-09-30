@@ -20,4 +20,6 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # The viewing-key scanner the browser runs (repo zscan, wasm/), used natively for treasuries.
-zscan-wasm = { git = "https://github.com/adamzkdev/zscan", rev = "610d5725734de5e031a26aeefdcb69f5642aa8f2" }
+# A copy of the explorer's scanner crate (adamzkdev/zscan wasm/ at 610d572): that repo is
+# private, so the Railway build can't fetch it. Keep the two in sync.
+zscan-wasm = { path = "../scanner" }
