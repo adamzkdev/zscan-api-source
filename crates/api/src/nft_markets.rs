@@ -1102,6 +1102,8 @@ pub struct MapTrait {
 pub struct MapAtlas {
     /// API path of the JPEG mosaic.
     pub url: String,
+    /// The same mosaic at half the size (a quarter of the weight), to show something at once.
+    pub preview: String,
     pub cell: u32,
     pub cols: u32,
 }
@@ -1207,16 +1209,24 @@ pub async fn map(
         items,
         atlas: MapAtlas {
             url: format!("/v1/collections/{}/map/image", p.slug),
+            preview: format!("/v1/collections/{}/map/image?size=small", p.slug),
             cell: ATLAS_CELL,
             cols: ATLAS_COLS,
         },
     })
 }
 
+/// A project's atlas as JPEG: full size, and half size for a quick first paint.
+#[derive(Clone)]
+pub struct Atlas {
+    pub full: Arc<Vec<u8>>,
+    pub small: Arc<Vec<u8>>,
+}
+
 /// A JPEG mosaic of every stored picture of an off-chain project, [`ATLAS_CELL`] pixels each,
 /// item `n` at slot `n - 1`. Kept in memory only, and rebuilt when pictures were added.
-pub async fn atlas(db: &PgPool, p: &Project) -> Option<Arc<Vec<u8>>> {
-    type Entry = (Instant, i64, Arc<Vec<u8>>);
+pub async fn atlas(db: &PgPool, p: &Project) -> Option<Atlas> {
+    type Entry = (Instant, i64, Atlas);
     static CACHE: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
     if !is_zilkroad(p) {
         return None;
@@ -1245,12 +1255,12 @@ pub async fn atlas(db: &PgPool, p: &Project) -> Option<Arc<Vec<u8>>> {
         .map_err(|e| tracing::warn!("atlas {}: {e:#}", p.slug))
         .ok()?;
     tracing::info!(
-        "atlas {}: {stored} pictures, {} KB in {:?}",
+        "atlas {}: {stored} pictures, {} KB (+{} KB preview) in {:?}",
         p.slug,
-        jpeg.len() / 1024,
+        jpeg.full.len() / 1024,
+        jpeg.small.len() / 1024,
         started.elapsed()
     );
-    let jpeg = Arc::new(jpeg);
     cache.insert(p.slug.clone(), (Instant::now(), stored, jpeg.clone()));
     Some(jpeg)
 }
@@ -1258,7 +1268,7 @@ pub async fn atlas(db: &PgPool, p: &Project) -> Option<Arc<Vec<u8>>> {
 /// Pictures read and drawn per step: stored originals weigh up to ~60 KB each.
 const ATLAS_BATCH: i64 = 250;
 
-async fn build_atlas(db: &PgPool, project: &str, slots: u32) -> Result<Vec<u8>> {
+async fn build_atlas(db: &PgPool, project: &str, slots: u32) -> Result<Atlas> {
     use image::{imageops, Rgb, RgbImage};
     let rows_n = slots.div_ceil(ATLAS_COLS);
     let mut sheet = RgbImage::new(ATLAS_COLS * ATLAS_CELL, rows_n * ATLAS_CELL);
@@ -1303,9 +1313,21 @@ async fn build_atlas(db: &PgPool, project: &str, slots: u32) -> Result<Vec<u8>> 
         .await?;
     }
     tokio::task::spawn_blocking(move || {
-        let mut out = std::io::Cursor::new(Vec::new());
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 72).encode_image(&sheet)?;
-        Ok(out.into_inner())
+        let jpeg = |img: &RgbImage, q: u8| -> Result<Arc<Vec<u8>>> {
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q).encode_image(img)?;
+            Ok(Arc::new(out.into_inner()))
+        };
+        let small = imageops::resize(
+            &sheet,
+            sheet.width() / 2,
+            sheet.height() / 2,
+            imageops::FilterType::Triangle,
+        );
+        Ok(Atlas {
+            full: jpeg(&sheet, 72)?,
+            small: jpeg(&small, 70)?,
+        })
     })
     .await?
 }

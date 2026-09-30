@@ -921,13 +921,21 @@ pub async fn collection_map(
         .ok_or_else(|| ApiError::NotFound(format!("{} has no map", p.name)))
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct MapImageQuery {
+    /// `small`: half-size thumbnails, for a quick first paint.
+    pub size: Option<String>,
+}
+
 /// Thumbnails of every item of a marketplace-kept collection in one JPEG, 100 per row, item
 /// `n` at slot `n - 1` (see `atlas` in the map).
-#[utoipa::path(get, path = "/v1/collections/{slug}/map/image", params(("slug" = String, Path)),
+#[utoipa::path(get, path = "/v1/collections/{slug}/map/image",
+    params(("slug" = String, Path), MapImageQuery),
     responses((status = 200, description = "JPEG mosaic"), (status = 404)), tag = "inscriptions")]
 pub async fn collection_map_image(
     State(s): State<AppState>,
     Path(slug): Path<String>,
+    Query(q): Query<MapImageQuery>,
 ) -> Result<Response, ApiError> {
     use axum::http::header;
     use axum::response::IntoResponse;
@@ -936,13 +944,18 @@ pub async fn collection_map_image(
     let jpeg = nft_markets::atlas(&s.db.pool, p)
         .await
         .ok_or_else(|| ApiError::NotFound(format!("{} has no map", p.name)))?;
+    let body = if q.size.as_deref() == Some("small") {
+        jpeg.small
+    } else {
+        jpeg.full
+    };
     Ok((
         [
             (header::CONTENT_TYPE, "image/jpeg"),
             (header::CACHE_CONTROL, "public, max-age=3600"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        jpeg.as_ref().clone(),
+        body.as_ref().clone(),
     )
         .into_response())
 }
