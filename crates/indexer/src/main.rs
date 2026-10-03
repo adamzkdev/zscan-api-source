@@ -939,7 +939,16 @@ async fn mempool(ctx: &Ctx) -> Result<()> {
             ctx.db
                 .notify(
                     "zscan_mempool",
-                    &json!({ "txid": row.txid, "kind": row.kind, "fee": row.fee, "size": row.size }).to_string(),
+                    &json!({
+                        "txid": row.txid,
+                        "kind": row.kind,
+                        "fee": row.fee,
+                        "size": row.size,
+                        "transparent_out": row.transparent_out,
+                        "n_actions": row.n_actions,
+                        "seen_at": chrono::Utc::now(),
+                    })
+                    .to_string(),
                 )
                 .await?;
         }
