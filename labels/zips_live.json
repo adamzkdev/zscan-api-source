@@ -1,0 +1,21 @@
+{
+  "207": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "209": { "href": "https://zscan.cash/supply", "label": "Supply audit" },
+  "214": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "218": { "href": "https://zscan.cash/upgrades", "label": "NU7 countdown" },
+  "233": { "href": "https://zscan.cash/supply", "label": "Supply & burn" },
+  "234": { "href": "https://zscan.cash/supply", "label": "Supply & burn" },
+  "235": { "href": "https://zscan.cash/supply", "label": "Supply & burn" },
+  "258": { "href": "https://zscan.cash/ironwood", "label": "Ironwood tracker" },
+  "259": { "href": "https://zscan.cash/upgrades", "label": "NU7 countdown" },
+  "271": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "316": { "href": "https://developers.zscan.cash", "label": "UA inspector" },
+  "317": { "href": "https://zscan.cash/fees", "label": "Fee tracker" },
+  "318": { "href": "https://zscan.cash/ironwood", "label": "Ironwood tracker" },
+  "1014": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "1015": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "1016": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "2001": { "href": "https://zscan.cash/treasury", "label": "Treasury" },
+  "2003": { "href": "https://zscan.cash/upgrades", "label": "NU7 countdown" },
+  "2005": { "href": "https://zscan.cash/ironwood", "label": "Ironwood tracker" }
+}

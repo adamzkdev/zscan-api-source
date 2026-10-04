@@ -10,6 +10,7 @@ mod news;
 mod nft_markets;
 mod routes;
 mod ws;
+mod zips;
 
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
@@ -164,6 +165,9 @@ async fn main() -> Result<()> {
     if env_or("NEWS", default_on) != "0" {
         tokio::spawn(news::run(state.db.pool.clone()));
     }
+    if env_or("ZIPS", "1") != "0" {
+        tokio::spawn(zips::run(state.http.clone()));
+    }
     if env_or("NFT_ARCHIVE", "1") != "0" {
         tokio::spawn(nft_markets::archive(state.db.pool.clone()));
     }
@@ -195,6 +199,8 @@ async fn main() -> Result<()> {
         .route("/ecosystem/assets/daily", get(routes::market::assets_daily))
         .route("/news", get(routes::news::list))
         .route("/news/sources", get(routes::news::sources))
+        .route("/zips", get(routes::zips::list))
+        .route("/zips/{id}", get(routes::zips::detail))
         .route("/price", get(routes::price::price))
         .route("/price/history", get(routes::price::history))
         .route("/miners", get(routes::rankings::miners))

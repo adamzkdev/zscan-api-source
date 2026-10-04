@@ -12,7 +12,7 @@ use utoipa::{
 use crate::models::{BlockSummary, PoolValues, TxRow};
 use crate::routes::{
     address, blocks, bridges, compact, decode, fees, inscriptions, labels, market, network, news,
-    nft, pools, price, protocols, rankings, search, status, supply, treasuries, tx, upgrades,
+    nft, pools, price, protocols, rankings, search, status, supply, treasuries, tx, upgrades, zips,
 };
 
 /// Error body returned with every 4xx/5xx response.
@@ -111,7 +111,7 @@ protocol makes public."#;
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
         inscriptions::image, inscriptions::by_address,
         nft::collections, nft::collection, nft::collection_stats, nft::collection_map, nft::collection_map_image, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
-        nft::sales, news::list, news::sources, treasuries::list, treasuries::detail,
+        nft::sales, news::list, news::sources, zips::list, zips::detail, treasuries::list, treasuries::detail,
         market::overview, market::daily, market::coins, market::assets, market::assets_daily,
         crate::ws::handler,
     ),
@@ -125,6 +125,7 @@ protocol makes public."#;
         (name = "network", description = "Network stats, fees (ZIP-317), mempool, miners, price, service health and live events."),
         (name = "market", description = "ZEC markets (spot and perpetual venues: volume, spread, open interest, funding) and ZEC on other chains (bridged and wrapped assets, supply, DEX liquidity)."),
         (name = "news", description = "Zcash news from official blogs, the forum, grants, digests and releases, plus network events ZScan detects (records, spikes)."),
+        (name = "zips", description = "Zcash Improvement Proposals from github.com/zcash/zips: status, owners, a summary, and where to see them live on ZScan."),
         (name = "search", description = "Resolve any height, hash, txid or address."),
         (name = "protocols", description = "Holdings and flows of protocols and entities touching ZEC: shielded pools, treasuries, bridges, mining pools, exchanges, and cross-chain flows."),
         (name = "inscriptions", description = "Inscriptions (Zerdinals) inscribed in transparent scriptSigs: on-chain images and files, ZRC-721 collections and IPFS NFTs. Ownership follows transparent outputs; spending into a shielded transaction ends tracking. Token documents (ZRC-20) are numbered but not indexed."),

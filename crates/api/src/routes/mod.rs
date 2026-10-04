@@ -20,6 +20,7 @@ pub mod supply;
 pub mod treasuries;
 pub mod tx;
 pub mod upgrades;
+pub mod zips;
 
 /// Current tip height known to the index.
 pub async fn tip(db: &zscan_db::Db) -> anyhow::Result<Option<i32>> {
