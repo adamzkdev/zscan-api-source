@@ -448,6 +448,20 @@ impl Db {
         Ok(())
     }
 
+    /// Recomputes each miner address's pool name (most common tag) and block count.
+    pub async fn refresh_miner_pools(&self) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO miner_pools (miner, pool, blocks)
+             SELECT miner, mode() WITHIN GROUP (ORDER BY miner_pool) FILTER (WHERE miner_pool IS NOT NULL), count(*)
+             FROM blocks WHERE miner IS NOT NULL GROUP BY miner
+             ON CONFLICT (miner) DO UPDATE SET pool = EXCLUDED.pool, blocks = EXCLUDED.blocks
+             WHERE (miner_pools.pool, miner_pools.blocks) IS DISTINCT FROM (EXCLUDED.pool, EXCLUDED.blocks)",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Recomputes the `daily_stats` rollup (transactions, blocks and pool deltas per day) for
     /// days from `since` on (all when `None`). Only days whose transactions are all stored are
     /// touched: the day holding the lowest stored transaction height may be partial (backfill
@@ -810,6 +824,26 @@ async fn insert_block_tx(tx: &mut Transaction<'_, Postgres>, b: &IndexedBlock) -
         .bind(&i_prev_n)
         .bind(&i_value)
         .bind(&i_addr)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if !o_txid.is_empty() || !i_txid.is_empty() {
+        // Per-address rows (and, by trigger, address_stats) for this block's transactions.
+        sqlx::query(
+            "INSERT INTO address_txs (address, txid, height, block_index, time, kind, received, sent)
+             SELECT x.address, x.txid, t.height, t.block_index, t.time, t.kind, sum(x.r), sum(x.s)
+             FROM (
+                SELECT address, txid, value AS r, 0::bigint AS s FROM tx_outputs
+                WHERE txid = ANY($1) AND address IS NOT NULL
+                UNION ALL
+                SELECT address, txid, 0, COALESCE(value, 0) FROM tx_inputs
+                WHERE txid = ANY($1) AND address IS NOT NULL
+             ) x
+             JOIN transactions t USING (txid)
+             GROUP BY x.address, x.txid, t.height, t.block_index, t.time, t.kind
+             ORDER BY x.address",
+        )
+        .bind(&c.txid)
         .execute(&mut **tx)
         .await?;
     }

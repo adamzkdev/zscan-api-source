@@ -130,6 +130,7 @@ async fn main() -> Result<()> {
     let economics = tokio::spawn(supervise("economics", move || economics(ctx).boxed()));
     let audit = tokio::spawn(supervise("audit", move || audit(ctx).boxed()));
     let daily = tokio::spawn(supervise("daily", move || daily(ctx).boxed()));
+    let miner_pools = tokio::spawn(supervise("miner_pools", move || miner_pools(ctx).boxed()));
     let labels = tokio::spawn(supervise("labels", move || labels(ctx).boxed()));
     let bridges = tokio::spawn(supervise("bridges", move || bridges(ctx).boxed()));
     let inscriptions = tokio::spawn(supervise("inscriptions", {
@@ -166,6 +167,7 @@ async fn main() -> Result<()> {
         economics,
         audit,
         daily,
+        miner_pools,
         labels,
         bridges,
         inscriptions,
@@ -380,6 +382,14 @@ async fn audit(ctx: &Ctx) -> Result<()> {
                 .await?;
         }
         tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+}
+
+/// Keeps `miner_pools` (pool name and block count per miner address) current.
+async fn miner_pools(ctx: &Ctx) -> Result<()> {
+    loop {
+        ctx.db.refresh_miner_pools().await?;
+        tokio::time::sleep(Duration::from_secs(300)).await;
     }
 }
 

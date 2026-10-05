@@ -124,28 +124,18 @@ pub async fn detail(
         Option<DateTime<Utc>>,
         Option<DateTime<Utc>>,
     ) = sqlx::query_as(
-        "WITH x AS (
-            SELECT txid, value AS recv, 0::bigint AS sent FROM tx_outputs WHERE address = $1
-            UNION ALL
-            SELECT txid, 0, value FROM tx_inputs WHERE address = $1)
-         SELECT sum(recv)::bigint, sum(sent)::bigint, count(DISTINCT x.txid), min(t.time), max(t.time)
-         FROM x JOIN transactions t USING (txid)",
+        "SELECT received, sent, tx_count, first_seen, last_seen FROM address_stats WHERE address = $1",
     )
     .bind(&address)
-    .fetch_one(&s.db.pool)
-    .await?;
+    .fetch_optional(&s.db.pool)
+    .await?
+    .unwrap_or((None, None, 0, None, None));
 
-    const HISTORY: &str = "WITH h AS (
-            SELECT t.txid, t.height, t.time, t.kind, t.block_index, sum(x.delta)::bigint AS delta FROM (
-                SELECT txid, value AS delta FROM tx_outputs WHERE address = $1
-                UNION ALL
-                SELECT txid, -value FROM tx_inputs WHERE address = $1) x
-            JOIN transactions t USING (txid)
-            GROUP BY t.txid, t.height, t.time, t.kind, t.block_index
-         ), f AS (
-            SELECT * FROM h
-            WHERE ($2::text IS NULL OR kind = $2)
-              AND ($3::text IS NULL OR ($3 = 'in' AND delta >= 0) OR ($3 = 'out' AND delta < 0))
+    const HISTORY: &str = "WITH f AS (
+            SELECT txid, height, time, kind, block_index, received - sent AS delta FROM address_txs
+            WHERE address = $1
+              AND ($2::text IS NULL OR kind = $2)
+              AND ($3::text IS NULL OR ($3 = 'in' AND received >= sent) OR ($3 = 'out' AND received < sent))
          )";
     let txs = sqlx::query_as::<_, AddressTx>(&format!(
         "{HISTORY} SELECT txid, height, time, kind, delta FROM f ORDER BY {order} LIMIT $4 OFFSET $5"
@@ -157,20 +147,23 @@ pub async fn detail(
     .bind(offset)
     .fetch_all(&s.db.pool)
     .await?;
-    let filtered_count: i64 = sqlx::query_scalar(&format!("{HISTORY} SELECT count(*) FROM f"))
-        .bind(&address)
-        .bind(&q.kind)
-        .bind(direction)
-        .fetch_one(&s.db.pool)
-        .await?;
+    let filtered_count: i64 = if q.kind.is_none() && direction.is_none() {
+        tx_count
+    } else {
+        sqlx::query_scalar(&format!("{HISTORY} SELECT count(*) FROM f"))
+            .bind(&address)
+            .bind(&q.kind)
+            .bind(direction)
+            .fetch_one(&s.db.pool)
+            .await?
+    };
 
-    let (blocks_mined, pool): (i64, Option<String>) = sqlx::query_as(
-        "SELECT count(*), mode() WITHIN GROUP (ORDER BY miner_pool) FILTER (WHERE miner_pool IS NOT NULL)
-         FROM blocks WHERE miner = $1",
-    )
-    .bind(&address)
-    .fetch_one(&s.db.pool)
-    .await?;
+    let (blocks_mined, pool): (i64, Option<String>) =
+        sqlx::query_as("SELECT blocks, pool FROM miner_pools WHERE miner = $1")
+            .bind(&address)
+            .fetch_optional(&s.db.pool)
+            .await?
+            .unwrap_or((0, None));
     let tag = super::labels::lookup(&s.db, std::slice::from_ref(&address))
         .await?
         .remove(&address);
@@ -264,12 +257,8 @@ pub async fn csv(
         ));
     }
     let rows: Vec<(String, i32, DateTime<Utc>, String, i64)> = sqlx::query_as(
-        "SELECT t.txid, t.height, t.time, t.kind, sum(x.delta)::bigint FROM (
-            SELECT txid, value AS delta FROM tx_outputs WHERE address = $1
-            UNION ALL SELECT txid, -value FROM tx_inputs WHERE address = $1) x
-         JOIN transactions t USING (txid)
-         GROUP BY t.txid, t.height, t.time, t.kind, t.block_index
-         ORDER BY t.height DESC, t.block_index DESC LIMIT 10000",
+        "SELECT txid, height, time, kind, received - sent FROM address_txs WHERE address = $1
+         ORDER BY height DESC, block_index DESC LIMIT 10000",
     )
     .bind(&address)
     .fetch_all(&s.db.pool)

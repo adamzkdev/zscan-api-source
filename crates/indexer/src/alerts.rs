@@ -165,13 +165,8 @@ async fn scan(ctx: &Ctx) -> Result<()> {
     if !by_address.is_empty() {
         let addresses: Vec<String> = by_address.keys().cloned().collect();
         let moves: Vec<(String, String, i32, DateTime<Utc>, i64)> = sqlx::query_as(
-            "SELECT m.address, m.txid, t.height, t.time, sum(m.delta)::bigint FROM (
-                 SELECT address, txid, value AS delta FROM tx_outputs WHERE address = ANY($1)
-                 UNION ALL
-                 SELECT address, txid, -value FROM tx_inputs WHERE address = ANY($1) AND value IS NOT NULL
-             ) m JOIN transactions t ON t.txid = m.txid
-             WHERE t.height > $2 AND t.height <= $3
-             GROUP BY m.address, m.txid, t.height, t.time",
+            "SELECT address, txid, height, time, received - sent FROM address_txs
+             WHERE address = ANY($1) AND height > $2 AND height <= $3",
         )
         .bind(&addresses)
         .bind(from as i32)

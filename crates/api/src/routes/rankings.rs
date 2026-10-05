@@ -17,9 +17,9 @@ use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 /// Pool name for a miner address: the most common pool tag across all its blocks.
+/// Kept in `miner_pools`, which the indexer refreshes.
 pub const MINER_POOL_SQL: &str =
-    "(SELECT mode() WITHIN GROUP (ORDER BY b2.miner_pool) FROM blocks b2 \
-    WHERE b2.miner = blocks.miner AND b2.miner_pool IS NOT NULL)";
+    "(SELECT mp.pool FROM miner_pools mp WHERE mp.miner = blocks.miner)";
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct MinersQuery {
@@ -170,22 +170,17 @@ async fn refresh_once(s: &AppState) -> anyhow::Result<()> {
     // The busiest addresses, plus every labeled one (exchanges, bridges and treasuries can hold
     // a lot while moving little).
     let candidates: Vec<(String, i64)> = sqlx::query_as(
-        "WITH x AS (
-            SELECT address, txid, value FROM tx_outputs WHERE address IS NOT NULL
-            UNION ALL
-            SELECT address, txid, value FROM tx_inputs WHERE address IS NOT NULL
-         ), busy AS (
-            SELECT address FROM x GROUP BY address ORDER BY sum(value) DESC LIMIT 200
+        "WITH busy AS (
+            SELECT address FROM address_stats ORDER BY received DESC LIMIT 200
          ), c AS (SELECT address FROM busy UNION SELECT address FROM labels)
-         SELECT c.address, count(DISTINCT x.txid) FROM c LEFT JOIN x USING (address) GROUP BY c.address",
+         SELECT c.address, COALESCE(a.tx_count, 0) FROM c LEFT JOIN address_stats a USING (address)",
     )
     .fetch_all(&s.db.pool)
     .await?;
-    let labels: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
-        "SELECT DISTINCT miner, {MINER_POOL_SQL} FROM blocks WHERE miner IS NOT NULL"
-    ))
-    .fetch_all(&s.db.pool)
-    .await?;
+    let labels: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT miner, pool FROM miner_pools")
+            .fetch_all(&s.db.pool)
+            .await?;
     let transparent: i64 =
         sqlx::query_scalar("SELECT transparent FROM pool_snapshots ORDER BY height DESC LIMIT 1")
             .fetch_optional(&s.db.pool)
