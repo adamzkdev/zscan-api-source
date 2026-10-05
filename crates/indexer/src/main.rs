@@ -216,6 +216,10 @@ async fn follow(ctx: &Ctx) -> Result<()> {
                     continue;
                 }
             }
+            // A stop between insert_block and set_high leaves this block stored: index it afresh.
+            if ctx.db.block_hash(h).await?.is_some() {
+                ctx.db.delete_blocks(h, h).await?;
+            }
             let b = build_block(&ctx.db, &ctx.lwd, &ctx.resolver, cb).await?;
             let n = b.txs.len();
             ctx.db.insert_block(&b).await?;
