@@ -8,6 +8,7 @@ mod market;
 mod models;
 mod news;
 mod nft_markets;
+mod presence;
 mod routes;
 mod ws;
 mod zips;
@@ -148,6 +149,7 @@ async fn main() -> Result<()> {
         });
     }
     tokio::spawn(ws::listen(state.clone()));
+    tokio::spawn(presence::tick());
     tokio::spawn(state.keys.clone().flush_loop());
     tokio::spawn(routes::rankings::refresh_accounts(state.clone()));
     tokio::spawn(refresh_nft_registry(state.http.clone()));
@@ -260,6 +262,7 @@ async fn main() -> Result<()> {
         .route("/treasuries", get(routes::treasuries::list))
         .route("/treasuries/{slug}", get(routes::treasuries::detail))
         .route("/ws", get(ws::handler))
+        .route("/street/presence", get(presence::handler))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));
 
@@ -338,7 +341,10 @@ async fn health(State(s): State<AppState>) -> Response {
 /// Paths allowed to run long: the live WebSocket and compact-block downloads for the
 /// in-browser viewing-key scanner.
 fn long_running(path: &str) -> bool {
-    path == "/v1/ws" || path.starts_with("/v1/compact") || path.ends_with("/shielded")
+    path == "/v1/ws"
+        || path == "/v1/street/presence"
+        || path.starts_with("/v1/compact")
+        || path.ends_with("/shielded")
 }
 
 /// Answers 503 instead of hanging when a request takes longer than `API_REQUEST_TIMEOUT_SECS`.
