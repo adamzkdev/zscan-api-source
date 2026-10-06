@@ -10,6 +10,7 @@ mod news;
 mod nft_markets;
 mod presence;
 mod routes;
+mod street_chat;
 mod ws;
 mod zips;
 
@@ -263,6 +264,7 @@ async fn main() -> Result<()> {
         .route("/treasuries/{slug}", get(routes::treasuries::detail))
         .route("/ws", get(ws::handler))
         .route("/street/presence", get(presence::handler))
+        .route("/street/chat", post(street_chat::chat))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));
 
@@ -487,7 +489,7 @@ async fn cache_control(req: Request, next: Next) -> Response {
 /// The client address to rate-limit. `X-Forwarded-For` is only trusted when the request comes
 /// from our own reverse proxy / web container (a private address); anyone else could forge it.
 /// The last hop is the one appended by the proxy closest to us.
-fn client_ip(peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
+pub(crate) fn client_ip(peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
     if !is_internal(peer) && !has_internal_token(headers) {
         return Some(peer.to_canonical());
     }

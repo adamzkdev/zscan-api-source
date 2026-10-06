@@ -25,7 +25,11 @@ pub async fn list(Query(q): Query<ZipQuery>) -> ApiResult<Vec<Zip>> {
         zips::all()
             .iter()
             .filter(|z| q.status.as_deref().is_none_or(|s| eq(&z.status, s)))
-            .filter(|z| q.category.as_deref().is_none_or(|c| z.categories.iter().any(|x| eq(x, c))))
+            .filter(|z| {
+                q.category
+                    .as_deref()
+                    .is_none_or(|c| z.categories.iter().any(|x| eq(x, c)))
+            })
             .cloned()
             .collect(),
     ))

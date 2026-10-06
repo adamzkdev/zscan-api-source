@@ -57,8 +57,12 @@ pub fn all() -> Arc<Vec<Zip>> {
 fn live_pages() -> &'static HashMap<u32, Live> {
     static L: OnceLock<HashMap<u32, Live>> = OnceLock::new();
     L.get_or_init(|| {
-        let raw: HashMap<String, Live> = serde_json::from_str(include_str!("../../../labels/zips_live.json")).expect("labels/zips_live.json is valid");
-        raw.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).collect()
+        let raw: HashMap<String, Live> =
+            serde_json::from_str(include_str!("../../../labels/zips_live.json"))
+                .expect("labels/zips_live.json is valid");
+        raw.into_iter()
+            .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+            .collect()
     })
 }
 
@@ -92,11 +96,20 @@ async fn load(http: &reqwest::Client) -> Result<Vec<Zip>> {
     if let Ok(token) = std::env::var("GITHUB_TOKEN") {
         req = req.bearer_auth(token);
     }
-    let listing: Vec<Entry> = req.send().await?.error_for_status().context("GitHub listing")?.json().await?;
+    let listing: Vec<Entry> = req
+        .send()
+        .await?
+        .error_for_status()
+        .context("GitHub listing")?
+        .json()
+        .await?;
     let files: Vec<String> = listing
         .into_iter()
         .map(|e| e.name)
-        .filter(|n| (n.starts_with("zip-") || n.starts_with("draft-")) && (n.ends_with(".md") || n.ends_with(".rst")))
+        .filter(|n| {
+            (n.starts_with("zip-") || n.starts_with("draft-"))
+                && (n.ends_with(".md") || n.ends_with(".rst"))
+        })
         .collect();
     let mut zips = Vec::new();
     // raw files are not rate limited like the API; 16 at a time keeps a refresh quick
@@ -118,7 +131,12 @@ async fn load(http: &reqwest::Client) -> Result<Vec<Zip>> {
         }
     }
     anyhow::ensure!(!zips.is_empty(), "no ZIP could be read");
-    zips.sort_by(|a, b| a.number.unwrap_or(u32::MAX).cmp(&b.number.unwrap_or(u32::MAX)).then_with(|| a.slug.cmp(&b.slug)));
+    zips.sort_by(|a, b| {
+        a.number
+            .unwrap_or(u32::MAX)
+            .cmp(&b.number.unwrap_or(u32::MAX))
+            .then_with(|| a.slug.cmp(&b.slug))
+    });
     Ok(zips)
 }
 
@@ -126,7 +144,10 @@ async fn load(http: &reqwest::Client) -> Result<Vec<Zip>> {
 fn preamble(text: &str) -> HashMap<String, Vec<String>> {
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     let lines: Vec<&str> = text.lines().collect();
-    let Some(start) = lines.iter().position(|l| l.trim_start().starts_with("ZIP:")) else {
+    let Some(start) = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("ZIP:"))
+    else {
         return out;
     };
     let mut key: Option<String> = None;
@@ -135,11 +156,23 @@ fn preamble(text: &str) -> HashMap<String, Vec<String>> {
             break;
         }
         let t = line.trim();
-        let kv = t.split_once(':').filter(|(k, _)| !k.is_empty() && k.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        let kv = t.split_once(':').filter(|(k, _)| {
+            !k.is_empty()
+                && k.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                && k.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        });
         match kv {
             Some((k, v)) => {
                 let v = v.trim();
-                out.insert(k.to_string(), if v.is_empty() { vec![] } else { vec![v.to_string()] });
+                out.insert(
+                    k.to_string(),
+                    if v.is_empty() {
+                        vec![]
+                    } else {
+                        vec![v.to_string()]
+                    },
+                );
                 key = Some(k.to_string());
             }
             _ => {
@@ -155,7 +188,9 @@ fn preamble(text: &str) -> HashMap<String, Vec<String>> {
 /// First paragraph under the "Abstract" heading (rst underline or markdown #), as plain text.
 fn summary(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
-    let at = lines.iter().position(|l| l.trim().trim_start_matches('#').trim() == "Abstract")?;
+    let at = lines
+        .iter()
+        .position(|l| l.trim().trim_start_matches('#').trim() == "Abstract")?;
     let mut para: Vec<String> = Vec::new();
     for l in &lines[at + 1..] {
         let t = l.trim();
@@ -172,7 +207,13 @@ fn summary(text: &str) -> Option<String> {
         return None;
     }
     // inline maths ($\mathsf{MAX\_MONEY}$) reads as its name
-    let joined = para.join(" ").replace("\\_", "_").replace("\\mathsf{", "").replace("\\mathrm{", "").replace("\\text{", "").replace(['$', '{', '}'], "");
+    let joined = para
+        .join(" ")
+        .replace("\\_", "_")
+        .replace("\\mathsf{", "")
+        .replace("\\mathrm{", "")
+        .replace("\\text{", "")
+        .replace(['$', '{', '}'], "");
     let mut s = plain(&joined);
     if s.chars().count() > ABSTRACT_MAX {
         let cut: String = s.chars().take(ABSTRACT_MAX).collect();
@@ -206,7 +247,8 @@ fn plain(s: &str) -> String {
             }
             '`' | '*' | '[' => {}
             ']' => out.push(']'),
-            '_' if matches!(chars.peek(), None | Some(' ' | '.' | ',' | ';' | ')')) && out.ends_with(|ch: char| ch.is_alphanumeric() || ch == ' ') => {}
+            '_' if matches!(chars.peek(), None | Some(' ' | '.' | ',' | ';' | ')'))
+                && out.ends_with(|ch: char| ch.is_alphanumeric() || ch == ' ') => {}
             _ => out.push(c),
         }
     }
@@ -232,11 +274,20 @@ fn to_zip(slug: &str, text: &str) -> Option<Zip> {
     if title.is_empty() || title.starts_with('{') {
         return None;
     }
-    let raw = p.get("Status").map(|v| v.join(" ")).unwrap_or_else(|| "Unknown".into());
+    let raw = p
+        .get("Status")
+        .map(|v| v.join(" "))
+        .unwrap_or_else(|| "Unknown".into());
     // the first capitalised word, after the first "[Revision …]" prefix if any
     let after = raw.split_once(']').map_or(raw.as_str(), |(_, b)| b).trim();
-    let status = after.split(|c: char| !c.is_ascii_alphabetic()).find(|w| w.chars().next().is_some_and(|c| c.is_ascii_uppercase())).unwrap_or("Unknown").to_string();
-    let number = slug.strip_prefix("zip-").and_then(|n| n.parse::<u32>().ok());
+    let status = after
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+        .unwrap_or("Unknown")
+        .to_string();
+    let number = slug
+        .strip_prefix("zip-")
+        .and_then(|n| n.parse::<u32>().ok());
     let categories = p
         .get("Category")
         .map(|v| v.join(" "))
@@ -251,7 +302,19 @@ fn to_zip(slug: &str, text: &str) -> Option<Zip> {
         .collect();
     let owners = p
         .get("Owners")
-        .map(|v| v.iter().map(|o| o.split('<').next().unwrap_or("").trim().trim_end_matches(',').to_string()).filter(|o| !o.is_empty()).collect())
+        .map(|v| {
+            v.iter()
+                .map(|o| {
+                    o.split('<')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .trim_end_matches(',')
+                        .to_string()
+                })
+                .filter(|o| !o.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
     Some(Zip {
         slug: slug.to_string(),
@@ -295,7 +358,10 @@ mod tests {
         let z = to_zip("draft-arya-deploy-nu7", md).unwrap();
         assert_eq!(z.number, None);
         assert_eq!(z.status, "Draft");
-        assert_eq!(z.summary.as_deref(), Some("This proposal defines the NU7 upgrade."));
+        assert_eq!(
+            z.summary.as_deref(),
+            Some("This proposal defines the NU7 upgrade.")
+        );
     }
 
     /// `cargo test -p zscan-api zips::tests::live -- --ignored --nocapture`: every ZIP, as JSON.
@@ -308,6 +374,10 @@ mod tests {
 
     #[test]
     fn skips_templates() {
-        assert!(to_zip("zip-guide", "  ZIP: XXX\n  Title: {Something Short and To the Point}\n").is_none());
+        assert!(to_zip(
+            "zip-guide",
+            "  ZIP: XXX\n  Title: {Something Short and To the Point}\n"
+        )
+        .is_none());
     }
 }
