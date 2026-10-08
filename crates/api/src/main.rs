@@ -10,7 +10,10 @@ mod news;
 mod nft_markets;
 mod presence;
 mod routes;
+mod street;
 mod street_chat;
+mod street_llm;
+mod street_plots;
 mod ws;
 mod zips;
 
@@ -25,7 +28,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
@@ -170,6 +173,9 @@ async fn main() -> Result<()> {
     if env_or("NEWS", default_on) != "0" {
         tokio::spawn(news::run(state.db.pool.clone()));
     }
+    if env_or("STREET_PAPER", default_on) != "0" {
+        tokio::spawn(street::paper_loop(state.clone()));
+    }
     if env_or("ZIPS", "1") != "0" {
         tokio::spawn(zips::run(state.http.clone()));
     }
@@ -267,6 +273,18 @@ async fn main() -> Result<()> {
         .route("/ws", get(ws::handler))
         .route("/street/presence", get(presence::handler))
         .route("/street/chat", post(street_chat::chat))
+        .route("/street/gossip", get(street::gossip))
+        .route("/street/paper", get(street::paper))
+        .route("/street/mayor", get(street::mayor))
+        .route("/street/events", get(street::events))
+        .route("/street/memory", get(street::memory).post(street::remember))
+        .route(
+            "/street/plots",
+            get(street_plots::list).post(street_plots::save),
+        )
+        .route("/street/plots/{plot}", delete(street_plots::free))
+        .route("/street/plots/{plot}/report", post(street_plots::report))
+        .route("/street/plots/{plot}/hide", post(street_plots::hide))
         .layer(middleware::from_fn(cache_control))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit));
 

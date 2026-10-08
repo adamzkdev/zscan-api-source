@@ -1,0 +1,29 @@
+{
+  "description": "Live events in ZStreet (street.zscan.cash), served by api.zscan.cash/v1/street/events. Weekly events repeat at a UTC weekday and time (the API returns the next or current occurrence); one-off events take start_time (RFC 3339) or start_height. kind: nu7, concert, tournament, race or party. The NU7 activation party is added automatically from the upgrade schedule.",
+  "events": [
+    {
+      "key": "opera-concert",
+      "title": "Saturday night at the Opera",
+      "kind": "concert",
+      "place": "opera",
+      "weekly": { "weekday": "sat", "time": "20:00" },
+      "duration_s": 3600
+    },
+    {
+      "key": "stadium-tournament",
+      "title": "Shielded vs Transparent",
+      "kind": "tournament",
+      "place": "stadium",
+      "weekly": { "weekday": "sun", "time": "18:00" },
+      "duration_s": 3600
+    },
+    {
+      "key": "pyramid-race",
+      "title": "Pyramid race",
+      "kind": "race",
+      "place": "pyramid",
+      "weekly": { "weekday": "fri", "time": "21:00" },
+      "duration_s": 1800
+    }
+  ]
+}

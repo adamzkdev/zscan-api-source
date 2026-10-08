@@ -1,7 +1,8 @@
 //! ZStreet presence: who is walking around the city right now. Each visitor sends where they are
 //! (a point on the map, their zkSNARK avatar, on foot or not) and now and then one of a few
-//! emojis; four times a second everyone gets the list. No free text, nothing stored: it lives in
-//! memory on the API instance and a visitor disappears when the socket closes.
+//! emojis; four times a second everyone gets the list. Small game events (a cheer, a goal, a lap)
+//! are relayed to everyone as they come. No free text, nothing stored: it lives in memory on the
+//! API instance and a visitor disappears when the socket closes.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,6 +32,8 @@ const ROOM_MAX: usize = 500;
 const MSGS_PER_SEC: u32 = 8;
 const EMOJI_EVERY: Duration = Duration::from_millis(1500);
 const EMOJI_SHOWN: Duration = Duration::from_secs(4);
+/// Game events a client may relay per second.
+const EVENTS_PER_SEC: u32 = 4;
 
 struct Visitor {
     avatar: u16,
@@ -39,6 +42,8 @@ struct Visitor {
     /// 0 looking at the map, 1 on foot, 2 inside a place.
     mode: u8,
     emoji: Option<(u8, Instant)>,
+    /// The place the visitor is in ("opera", "stadium"…), when inside one.
+    place: Option<String>,
 }
 
 struct Room {
@@ -50,7 +55,7 @@ struct Room {
 fn room() -> &'static Room {
     static R: OnceLock<Room> = OnceLock::new();
     R.get_or_init(|| {
-        let (tx, _) = broadcast::channel(16);
+        let (tx, _) = broadcast::channel(256);
         Room {
             visitors: Mutex::new(HashMap::new()),
             tx,
@@ -85,7 +90,8 @@ pub async fn tick() {
                         (p.x * 10.0).round() / 10.0,
                         (p.z * 10.0).round() / 10.0,
                         p.mode,
-                        e
+                        e,
+                        p.place
                     ])
                 })
                 .collect();
@@ -105,10 +111,27 @@ struct Update {
     m: Option<u8>,
     /// Emoji index.
     e: Option<u8>,
+    /// Place the visitor is in.
+    p: Option<String>,
+    /// A game event to relay.
+    ev: Option<Ev>,
 }
 
-/// WebSocket for ZStreet's visitors: send `{"a": avatar, "x", "z", "m": mode, "e": emoji}`,
-/// receive `{"type": "hello", "id"}` then `{"type": "presence", "n", "v": [[id, avatar, x, z, mode, emoji], …]}`.
+#[derive(Deserialize)]
+struct Ev {
+    k: String,
+    n: Option<i64>,
+}
+
+/// Sends a message to everyone in the city (e.g. `{"type": "plot", "plot": 3}`).
+pub fn broadcast(msg: String) {
+    let _ = room().tx.send(msg);
+}
+
+/// WebSocket for ZStreet's visitors: send `{"a": avatar, "x", "z", "m": mode, "e": emoji, "p": place,
+/// "ev": {"k", "n"}}`, receive `{"type": "hello", "id"}` then
+/// `{"type": "presence", "n", "v": [[id, avatar, x, z, mode, emoji, place], …]}`, relayed
+/// `{"type": "event", "id", "k", "n"}` and `{"type": "plot", "plot"}` when a player plot changes.
 pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     let Ok(slot) = state.ws_slots.clone().try_acquire_owned() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "too many live connections").into_response();
@@ -138,6 +161,8 @@ async fn client(mut socket: WebSocket) {
     }
     let mut window = Instant::now();
     let mut count = 0u32;
+    let mut ev_window = Instant::now();
+    let mut ev_count = 0u32;
     loop {
         tokio::select! {
             ev = rx.recv() => match ev {
@@ -160,8 +185,18 @@ async fn client(mut socket: WebSocket) {
                     if count > MSGS_PER_SEC {
                         continue;
                     }
-                    if let Ok(u) = serde_json::from_str::<Update>(&t) {
-                        apply(id, u);
+                    let Ok(u) = serde_json::from_str::<Update>(&t) else {
+                        continue;
+                    };
+                    if let Some(ev) = apply(id, u) {
+                        if ev_window.elapsed() >= Duration::from_secs(1) {
+                            ev_window = Instant::now();
+                            ev_count = 0;
+                        }
+                        ev_count += 1;
+                        if ev_count <= EVENTS_PER_SEC {
+                            broadcast(json!({ "type": "event", "id": id, "k": ev.k, "n": ev.n }).to_string());
+                        }
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -172,7 +207,16 @@ async fn client(mut socket: WebSocket) {
     r.visitors.lock().unwrap().remove(&id);
 }
 
-fn apply(id: u64, u: Update) {
+/// A place or event key: short, lowercase.
+fn key_ok(s: &str, max: usize, extra: char) -> bool {
+    !s.is_empty()
+        && s.len() <= max
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || (c.is_ascii_digit() && extra == '-') || c == extra)
+}
+
+/// Applies an update; returns the game event it carries, if valid.
+fn apply(id: u64, u: Update) -> Option<Ev> {
     let mut v = room().visitors.lock().unwrap();
     let p = v.entry(id).or_insert(Visitor {
         avatar: 1,
@@ -180,14 +224,15 @@ fn apply(id: u64, u: Update) {
         z: 0.0,
         mode: 0,
         emoji: None,
+        place: None,
     });
     if let Some(a) = u.a.filter(|a| (1..=10_000).contains(a)) {
         p.avatar = a;
     }
-    // the city is about 100 × 70 m around the origin
+    // the megalopolis spans about 472 × 474 m around the origin
     if let (Some(x), Some(z)) = (u.x.filter(|x| x.is_finite()), u.z.filter(|z| z.is_finite())) {
-        p.x = x.clamp(-60.0, 60.0);
-        p.z = z.clamp(-45.0, 40.0);
+        p.x = x.clamp(-240.0, 240.0);
+        p.z = z.clamp(-240.0, 240.0);
     }
     if let Some(m) = u.m.filter(|m| *m <= 2) {
         p.mode = m;
@@ -199,5 +244,31 @@ fn apply(id: u64, u: Update) {
         {
             p.emoji = Some((e, now));
         }
+    }
+    if let Some(place) = u.p {
+        // "" leaves the place; anything else invalid is ignored
+        if place.is_empty() {
+            p.place = None;
+        } else if key_ok(&place, 24, '-') {
+            p.place = Some(place);
+        }
+    }
+    u.ev.filter(|ev| key_ok(&ev.k, 16, '_'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_ok;
+
+    #[test]
+    fn keys() {
+        assert!(key_ok("opera-hall", 24, '-'));
+        assert!(key_ok("pyramid2", 24, '-'));
+        assert!(!key_ok("Opera", 24, '-'));
+        assert!(!key_ok("a b", 24, '-'));
+        assert!(key_ok("goal_home", 16, '_'));
+        assert!(!key_ok("goal-home", 16, '_'));
+        assert!(!key_ok("lap9", 16, '_'));
+        assert!(!key_ok("", 16, '_'));
     }
 }

@@ -18,9 +18,9 @@ use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::street_llm::clip;
 use crate::AppState;
 
-const DEFAULT_MODEL: &str = "deepseek/deepseek-v4.1-flash";
 const MAX_TURNS: usize = 10;
 const MAX_CHARS: usize = 500;
 const MAX_FACTS: usize = 2500;
@@ -65,10 +65,6 @@ fn under_budget() -> bool {
     TODAY.fetch_add(1, Ordering::Relaxed) < cap
 }
 
-fn clip(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
 /// `POST /v1/street/chat`: one answer from a character, in character.
 pub async fn chat(
     State(s): State<AppState>,
@@ -76,13 +72,13 @@ pub async fn chat(
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Response {
-    let Ok(key) = std::env::var("OPENROUTER_API_KEY") else {
+    if crate::street_llm::key().is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "chat_off", "message": "Talking is switched off for now" })),
         )
             .into_response();
-    };
+    }
     let ip = crate::client_ip(peer.ip(), &headers).unwrap_or(peer.ip());
     if let Some(wait) = crate::limited_for(limiter(), &ip) {
         return crate::too_many_requests(wait, "Give them a moment to catch their breath");
@@ -124,43 +120,12 @@ pub async fn chat(
     );
     let mut messages = vec![json!({ "role": "system", "content": system })];
     messages.extend(turns);
-    let model = std::env::var("STREET_CHAT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
-    let res = s
-        .http
-        .post("https://openrouter.ai/api/v1/chat/completions")
-        .bearer_auth(key)
-        .header("HTTP-Referer", "https://zstreet.cash")
-        .header("X-Title", "ZStreet")
-        .timeout(std::time::Duration::from_secs(25))
-        .json(&json!({ "model": model, "messages": messages, "max_tokens": 220, "temperature": 0.8, "reasoning": { "enabled": false } }))
-        .send()
-        .await;
-    let body: serde_json::Value = match res {
-        Ok(r) => r.json().await.unwrap_or_default(),
-        Err(e) => {
-            tracing::warn!("street chat: {e}");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": "upstream", "message": "They didn't hear you, try again" })),
-            )
-                .into_response();
-        }
-    };
-    match body["choices"][0]["message"]["content"]
-        .as_str()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-    {
+    match crate::street_llm::chat(&s.http, messages, 220, 0.8).await {
         Some(text) => Json(json!({ "reply": text })).into_response(),
-        None => {
-            tracing::warn!("street chat: no answer: {}", body["error"]);
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(
-                    json!({ "error": "upstream", "message": "They're lost for words, try again" }),
-                ),
-            )
-                .into_response()
-        }
+        None => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": "upstream", "message": "They didn't hear you, try again" })),
+        )
+            .into_response(),
     }
 }
