@@ -84,8 +84,8 @@ pub async fn chat(
             .into_response();
     };
     let ip = crate::client_ip(peer.ip(), &headers).unwrap_or(peer.ip());
-    if limiter().check_key(&ip).is_err() {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate_limited", "message": "Give them a moment to catch their breath" }))).into_response();
+    if let Some(wait) = crate::limited_for(limiter(), &ip) {
+        return crate::too_many_requests(wait, "Give them a moment to catch their breath");
     }
     if !under_budget() {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "budget", "message": "Everyone in the city is talked out for today" }))).into_response();

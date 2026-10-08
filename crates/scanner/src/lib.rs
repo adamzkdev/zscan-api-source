@@ -793,8 +793,13 @@ pub mod native {
         }
         /// Decrypts a transaction's full outputs, given as the JSON of
         /// `GET /v1/tx/{txid}/shielded`; receipts are included when `txid` is set.
-        pub fn decrypt_tx(&self, outputs_json: &str, txid: Option<&str>) -> Result<Vec<Decrypted>, String> {
-            let mut o: super::TxOutputs = serde_json::from_str(outputs_json).map_err(|e| e.to_string())?;
+        pub fn decrypt_tx(
+            &self,
+            outputs_json: &str,
+            txid: Option<&str>,
+        ) -> Result<Vec<Decrypted>, String> {
+            let mut o: super::TxOutputs =
+                serde_json::from_str(outputs_json).map_err(|e| e.to_string())?;
             if txid.is_some() {
                 o.txid = txid.map(String::from);
             }
@@ -802,7 +807,6 @@ pub mod native {
         }
     }
 }
-
 
 /* ------------------------------------------------------------------ receipts */
 
@@ -864,13 +868,19 @@ impl Receipt {
     }
 
     fn decode(token: &str) -> Result<Receipt, String> {
-        let bad = || String::from("This receipt is malformed or incomplete. Check that the whole link was copied.");
+        let bad = || {
+            String::from(
+                "This receipt is malformed or incomplete. Check that the whole link was copied.",
+            )
+        };
         let b = b64url_decode(token.trim()).ok_or_else(bad)?;
         if b.len() != RECEIPT_LEN {
             return Err(bad());
         }
         if b[0] != RECEIPT_VERSION {
-            return Err(String::from("This receipt was made by a newer version of ZScan Proof."));
+            return Err(String::from(
+                "This receipt was made by a newer version of ZScan Proof.",
+            ));
         }
         let network = match b[1] {
             0 => Network::Main,
@@ -899,7 +909,10 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 fn b64url_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &c)| n | (c as u32) << (16 - 8 * i));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &c)| n | (c as u32) << (16 - 8 * i));
         for i in 0..=chunk.len() {
             out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);
         }
@@ -966,8 +979,19 @@ pub fn verify_receipt(token: &str, outputs: JsValue) -> Result<JsValue, JsError>
 }
 
 fn check_receipt(r: &Receipt, o: &TxOutputs) -> Result<VerifiedReceipt, String> {
-    let no_output = || format!("Transaction {} has no {} output #{}.", r.txid, r.pool.name(), r.index);
-    let mismatch = || String::from("This receipt does not match the transaction on chain: it was altered or made up.");
+    let no_output = || {
+        format!(
+            "Transaction {} has no {} output #{}.",
+            r.txid,
+            r.pool.name(),
+            r.index
+        )
+    };
+    let mismatch = || {
+        String::from(
+            "This receipt does not match the transaction on chain: it was altered or made up.",
+        )
+    };
     let i = r.index as usize;
     let (value, recipient, memo) = match r.pool {
         Pool::Sapling => {
@@ -981,21 +1005,35 @@ fn check_receipt(r: &Receipt, o: &TxOutputs) -> Result<VerifiedReceipt, String> 
             );
             let esk = SaplingDomain::derive_esk(&note).ok_or_else(mismatch)?;
             let domain = SaplingDomain::new(Zip212Enforcement::On);
-            let (note, to, memo) =
-                try_output_recovery_with_pkd_esk(&domain, SaplingDomain::get_pk_d(&note), esk, &full)
-                    .ok_or_else(mismatch)?;
+            let (note, to, memo) = try_output_recovery_with_pkd_esk(
+                &domain,
+                SaplingDomain::get_pk_d(&note),
+                esk,
+                &full,
+            )
+            .ok_or_else(mismatch)?;
             let to = ZcashAddress::from_sapling(r.network, to.to_bytes()).encode();
             (note.value().inner(), to, memo)
         }
         Pool::Orchard | Pool::Ironwood => {
-            let list = if r.pool == Pool::Orchard { &o.orchard } else { &o.ironwood };
+            let list = if r.pool == Pool::Orchard {
+                &o.orchard
+            } else {
+                &o.ironwood
+            };
             let out = list.get(i).ok_or_else(no_output)?;
             let (full, compact) = FullOutput::parse_action(out).ok_or_else(no_output)?;
-            let addr = Option::<orchard::Address>::from(orchard::Address::from_raw_address_bytes(&r.addr))
-                .ok_or_else(mismatch)?;
+            let addr =
+                Option::<orchard::Address>::from(orchard::Address::from_raw_address_bytes(&r.addr))
+                    .ok_or_else(mismatch)?;
             let rho = compact.rho();
-            let rseed = Option::<RandomSeed>::from(RandomSeed::from_bytes(r.rseed, &rho)).ok_or_else(mismatch)?;
-            let version = if r.pool == Pool::Orchard { NoteVersion::V2 } else { NoteVersion::V3 };
+            let rseed = Option::<RandomSeed>::from(RandomSeed::from_bytes(r.rseed, &rho))
+                .ok_or_else(mismatch)?;
+            let version = if r.pool == Pool::Orchard {
+                NoteVersion::V2
+            } else {
+                NoteVersion::V3
+            };
             let note = Option::<orchard::Note>::from(orchard::Note::from_parts(
                 addr,
                 orchard::value::NoteValue::from_raw(0),
@@ -1014,9 +1052,15 @@ fn check_receipt(r: &Receipt, o: &TxOutputs) -> Result<VerifiedReceipt, String> 
                 try_output_recovery_with_pkd_esk(&d, IronwoodDomain::get_pk_d(&note), esk, &full)
             };
             let (note, to, memo) = found.ok_or_else(mismatch)?;
-            let ua = unified::Address::try_from_items(vec![unified::Receiver::Orchard(to.to_raw_address_bytes())])
-                .map_err(|_| mismatch())?;
-            (note.value().inner(), ZcashAddress::from_unified(r.network, ua).encode(), memo)
+            let ua = unified::Address::try_from_items(vec![unified::Receiver::Orchard(
+                to.to_raw_address_bytes(),
+            )])
+            .map_err(|_| mismatch())?;
+            (
+                note.value().inner(),
+                ZcashAddress::from_unified(r.network, ua).encode(),
+                memo,
+            )
         }
     };
     Ok(VerifiedReceipt {
@@ -1316,7 +1360,11 @@ mod tests {
         );
         let rho: Rho = dummy.rho();
         let rseed = Option::<RandomSeed>::from(RandomSeed::from_bytes([11; 32], &rho)).unwrap();
-        let version = if pool == Pool::Orchard { NoteVersion::V2 } else { NoteVersion::V3 };
+        let version = if pool == Pool::Orchard {
+            NoteVersion::V2
+        } else {
+            NoteVersion::V3
+        };
         let note = Option::<orchard::Note>::from(orchard::Note::from_parts(
             recipient,
             NoteValue::from_raw(value),
@@ -1328,11 +1376,9 @@ mod tests {
         let mut memo = [0u8; 512];
         memo[..memo_text.len()].copy_from_slice(memo_text);
         let cmx = OrchardCmx::from(note.commitment());
-        let rcv = Option::<ValueCommitTrapdoor>::from(ValueCommitTrapdoor::from_bytes([1; 32])).unwrap();
-        let cv = ValueCommitment::derive(
-            NoteValue::from_raw(value) - NoteValue::from_raw(0),
-            rcv,
-        );
+        let rcv =
+            Option::<ValueCommitTrapdoor>::from(ValueCommitTrapdoor::from_bytes([1; 32])).unwrap();
+        let cv = ValueCommitment::derive(NoteValue::from_raw(value) - NoteValue::from_raw(0), rcv);
         let (ct, out, epk) = if pool == Pool::Orchard {
             let enc = OrchardNoteEncryption::new(sender_ovk, note, memo);
             (
@@ -1360,8 +1406,17 @@ mod tests {
 
     fn tx_with(pool: Pool, action: OutputHex) -> TxOutputs {
         let (mut orchard, mut ironwood) = (vec![], vec![]);
-        if pool == Pool::Orchard { orchard.push(action) } else { ironwood.push(action) }
-        TxOutputs { txid: Some(hex::encode([0xab; 32])), sapling: vec![], orchard, ironwood }
+        if pool == Pool::Orchard {
+            orchard.push(action)
+        } else {
+            ironwood.push(action)
+        }
+        TxOutputs {
+            txid: Some(hex::encode([0xab; 32])),
+            sapling: vec![],
+            orchard,
+            ironwood,
+        }
     }
 
     /// The recipient (incoming key) and the sender (outgoing key) can each make a receipt, and
@@ -1373,18 +1428,39 @@ mod tests {
         let sk = Option::<SpendingKey>::from(SpendingKey::from_bytes([9; 32])).unwrap();
         let sender_fvk = OrchardFvk::from(&sk);
         for pool in [Pool::Orchard, Pool::Ironwood] {
-            let tx = tx_with(pool, action_to(pool, to, Some(sender_fvk.to_ovk(Scope::External)), 250_000_000, b"invoice 42"));
+            let tx = tx_with(
+                pool,
+                action_to(
+                    pool,
+                    to,
+                    Some(sender_fvk.to_ovk(Scope::External)),
+                    250_000_000,
+                    b"invoice 42",
+                ),
+            );
             for key in [ufvk(&recipient_fvk), ufvk(&sender_fvk)] {
                 let s = Scanner::parse(&key).unwrap();
                 let d = s.decrypt_outputs(&tx);
                 assert_eq!(d.len(), 1, "{pool:?}: output found");
                 let token = d[0].receipt.as_deref().expect("receipt");
                 let r = Receipt::decode(token).unwrap();
-                assert_eq!((r.pool, r.index, r.txid.as_str()), (pool, 0, hex::encode([0xab; 32]).as_str()));
+                assert_eq!(
+                    (r.pool, r.index, r.txid.as_str()),
+                    (pool, 0, hex::encode([0xab; 32]).as_str())
+                );
                 let v = check_receipt(&r, &tx).unwrap();
-                assert_eq!((v.value, v.memo.as_deref(), v.pool), (250_000_000, Some("invoice 42"), pool.name()));
-                let want = unified::Address::try_from_items(vec![unified::Receiver::Orchard(to.to_raw_address_bytes())]).unwrap();
-                assert_eq!(v.recipient, ZcashAddress::from_unified(Network::Main, want).encode());
+                assert_eq!(
+                    (v.value, v.memo.as_deref(), v.pool),
+                    (250_000_000, Some("invoice 42"), pool.name())
+                );
+                let want = unified::Address::try_from_items(vec![unified::Receiver::Orchard(
+                    to.to_raw_address_bytes(),
+                )])
+                .unwrap();
+                assert_eq!(
+                    v.recipient,
+                    ZcashAddress::from_unified(Network::Main, want).encode()
+                );
             }
         }
     }
@@ -1394,7 +1470,10 @@ mod tests {
     fn altered_receipts_are_rejected() {
         let fvk = fvk();
         let to = fvk.address_at(0u32, Scope::External);
-        let tx = tx_with(Pool::Ironwood, action_to(Pool::Ironwood, to, None, 1_000, b"hi"));
+        let tx = tx_with(
+            Pool::Ironwood,
+            action_to(Pool::Ironwood, to, None, 1_000, b"hi"),
+        );
         let s = Scanner::parse(&ufvk(&fvk)).unwrap();
         let token = s.decrypt_outputs(&tx)[0].receipt.clone().unwrap();
         let good = Receipt::decode(&token).unwrap();
@@ -1418,9 +1497,15 @@ mod tests {
         assert!(check_receipt(&r, &tx).is_err(), "missing output");
 
         // Another action with the same recipient and seed but a different value.
-        let forged = tx_with(Pool::Ironwood, action_to(Pool::Ironwood, to, None, 2_000, b"hi"));
+        let forged = tx_with(
+            Pool::Ironwood,
+            action_to(Pool::Ironwood, to, None, 2_000, b"hi"),
+        );
         let v = check_receipt(&good, &forged).unwrap();
-        assert_eq!(v.value, 2_000, "the value always comes from the chain, never the receipt");
+        assert_eq!(
+            v.value, 2_000,
+            "the value always comes from the chain, never the receipt"
+        );
 
         assert!(Receipt::decode("not-a-receipt").is_err());
         assert!(Receipt::decode(&token[..token.len() - 4]).is_err());
@@ -1438,7 +1523,9 @@ mod tests {
         };
         let token = r.encode().unwrap();
         assert_eq!(token.len(), 150);
-        assert!(token.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+        assert!(token
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
         assert_eq!(Receipt::decode(&token).unwrap(), r);
     }
 

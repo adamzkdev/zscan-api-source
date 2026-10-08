@@ -952,7 +952,12 @@ pub async fn collection_map_image(
     Ok((
         [
             (header::CONTENT_TYPE, "image/jpeg"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
+            // Rebuilt only when items are added: an hour fresh, then served stale while the
+            // browser revalidates in the background instead of blocking on a refetch.
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=3600, stale-while-revalidate=86400",
+            ),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         body.as_ref().clone(),

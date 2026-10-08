@@ -30,7 +30,9 @@ use axum::{
 };
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use tokio::sync::{broadcast, Semaphore};
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    catch_panic::CatchPanicLayer, compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer,
+};
 use tracing::info;
 use zscan_chain::{Lwd, Resolver};
 use zscan_db::Db;
@@ -272,10 +274,8 @@ async fn main() -> Result<()> {
         .nest("/v1", v1)
         .route("/openapi.json", get(|| async { Json(docs::openapi()) }))
         .route("/docs", get(docs::page))
-        .route("/health", get(health))
-        .layer(middleware::from_fn(request_timeout))
-        .layer(CompressionLayer::new())
-        .layer(CorsLayer::permissive())
+        .route("/health", get(health));
+    let app = outer_layers(app)
         // Traces carry method, path and status only: no client addresses or headers.
         .layer(
             TraceLayer::new_for_http().make_span_with(|req: &Request| {
@@ -294,6 +294,41 @@ async fn main() -> Result<()> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// The layers every response goes through. Tower applies the last `.layer` outermost, so CORS
+/// wraps everything else: rate-limit 429s (inner `rate_limit`), timeouts, panics turned into
+/// 500s, unknown-route 404s and handler errors all carry `Access-Control-Allow-Origin`, and
+/// browsers let the client read the status and `Retry-After` (exposed via `*`) to back off.
+fn outer_layers<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
+    router
+        .layer(middleware::from_fn(request_timeout))
+        .layer(CompressionLayer::new())
+        .layer(CatchPanicLayer::new())
+        .layer(CorsLayer::permissive())
+}
+
+/// A 429 with `Retry-After` (whole seconds, at least 1), so clients know when to come back.
+pub(crate) fn too_many_requests(wait: Duration, message: &str) -> Response {
+    let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(axum::http::header::RETRY_AFTER, secs.max(1).to_string())],
+        Json(serde_json::json!({ "error": "rate_limited", "message": message })),
+    )
+        .into_response()
+}
+
+/// How long until a keyed limiter would let `key` through again.
+pub(crate) fn limited_for<K>(limiter: &DefaultKeyedRateLimiter<K>, key: &K) -> Option<Duration>
+where
+    K: std::hash::Hash + Eq + Clone,
+{
+    use governor::clock::Clock;
+    limiter
+        .check_key(key)
+        .err()
+        .map(|nu| nu.wait_time_from(limiter.clock().now()))
 }
 
 /// Resolves on SIGTERM (deploys, restarts) or Ctrl-C. In-flight requests then get a few seconds
@@ -369,6 +404,7 @@ async fn request_timeout(req: Request, next: Next) -> Response {
             tracing::warn!(%path, "request timed out");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
+                [(axum::http::header::RETRY_AFTER, "5")],
                 Json(serde_json::json!({ "error": "timeout", "message": "The request took too long; try again" })),
             )
                 .into_response()
@@ -532,12 +568,8 @@ async fn rate_limit(
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
         };
-        if state.keys.limiter.check_key(&id).is_err() {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({ "error": "rate_limited", "message": "Too many requests for this API key" })),
-            )
-                .into_response();
+        if let Some(wait) = limited_for(&state.keys.limiter, &id) {
+            return too_many_requests(wait, "Too many requests for this API key");
         }
         state.keys.record(id);
         return next.run(req).await;
@@ -551,14 +583,13 @@ async fn rate_limit(
     } else {
         &state.limiter
     };
-    let limited = limiter.check_key(&ip).is_err()
-        || (path.ends_with("/tx/broadcast") && state.broadcast_limiter.check_key(&ip).is_err());
-    if limited {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(serde_json::json!({ "error": "rate_limited", "message": "Too many requests" })),
-        )
-            .into_response();
+    let limited = limited_for(limiter, &ip).or_else(|| {
+        path.ends_with("/tx/broadcast")
+            .then(|| limited_for(&state.broadcast_limiter, &ip))
+            .flatten()
+    });
+    if let Some(wait) = limited {
+        return too_many_requests(wait, "Too many requests");
     }
     next.run(req).await
 }
@@ -585,6 +616,69 @@ mod tests {
         let got = client_ip(proxy, &xff("1.2.3.4, 198.51.100.9"));
         assert_eq!(got, Some("198.51.100.9".parse().unwrap()));
         assert_eq!(client_ip(proxy, &HeaderMap::new()), None);
+    }
+
+    /// Every kind of response, including a 429 from an inner layer, a panic, an unknown route
+    /// and a handler error, carries the CORS headers so browsers let the client read it.
+    #[tokio::test]
+    async fn every_response_carries_cors() {
+        use axum::body::Body;
+        use axum::http::header;
+        use tower::ServiceExt;
+
+        // Stands in for `rate_limit`: an inner middleware that turns the request away.
+        let limited = get(|| async { "never reached" }).layer(middleware::from_fn(
+            |_req: Request, _next: Next| async {
+                too_many_requests(Duration::from_millis(1500), "Too many requests")
+            },
+        ));
+        let app = outer_layers(
+            Router::new()
+                .route("/ok", get(|| async { "ok" }))
+                .route(
+                    "/boom",
+                    get(|| async {
+                        if true {
+                            panic!("handler panic");
+                        }
+                        "unreachable"
+                    }),
+                )
+                .route(
+                    "/err",
+                    get(|| async { (StatusCode::BAD_GATEWAY, "Image unavailable") }),
+                )
+                .route("/limited", limited),
+        );
+
+        for (path, status) in [
+            ("/ok", StatusCode::OK),
+            ("/limited", StatusCode::TOO_MANY_REQUESTS),
+            ("/boom", StatusCode::INTERNAL_SERVER_ERROR),
+            ("/err", StatusCode::BAD_GATEWAY),
+            ("/missing", StatusCode::NOT_FOUND),
+        ] {
+            let req = axum::http::Request::get(path)
+                .header(header::ORIGIN, "http://localhost:3007")
+                .body(Body::empty())
+                .unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), status, "{path}");
+            let h = res.headers();
+            assert_eq!(h[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*", "{path}");
+            assert_eq!(h[header::ACCESS_CONTROL_EXPOSE_HEADERS], "*", "{path}");
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                assert_eq!(h[header::RETRY_AFTER], "2");
+            }
+        }
+    }
+
+    #[test]
+    fn retry_after_rounds_up() {
+        let res = too_many_requests(Duration::from_millis(10), "x");
+        assert_eq!(res.headers()[axum::http::header::RETRY_AFTER], "1");
+        let res = too_many_requests(Duration::from_secs(3), "x");
+        assert_eq!(res.headers()[axum::http::header::RETRY_AFTER], "3");
     }
 
     #[test]
