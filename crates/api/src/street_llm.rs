@@ -30,7 +30,7 @@ pub async fn chat(
         .bearer_auth(key)
         .header("HTTP-Referer", "https://zstreet.cash")
         .header("X-Title", "ZStreet")
-        .timeout(Duration::from_secs(25))
+        .timeout(Duration::from_secs(45))
         .json(&json!({ "model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "reasoning": { "enabled": false } }))
         .send()
         .await;

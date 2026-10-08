@@ -29,20 +29,20 @@ use crate::AppState;
 const SHIELDED_KINDS: &str = "('shielded', 'shielding', 'deshielding', 'migration', 'mixed')";
 
 /// One computation per key, shared by concurrent requests, for the last `keep` keys.
-struct Flights<V> {
+pub(crate) struct Flights<V> {
     map: Mutex<BTreeMap<u64, Arc<OnceCell<V>>>>,
     keep: usize,
 }
 
 impl<V> Flights<V> {
-    const fn new(keep: usize) -> Self {
+    pub(crate) const fn new(keep: usize) -> Self {
         Self {
             map: Mutex::new(BTreeMap::new()),
             keep,
         }
     }
 
-    fn cell(&self, key: u64) -> Arc<OnceCell<V>> {
+    pub(crate) fn cell(&self, key: u64) -> Arc<OnceCell<V>> {
         let mut m = self.map.lock().unwrap();
         let cell = m.entry(key).or_default().clone();
         while m.len() > self.keep {
@@ -52,7 +52,7 @@ impl<V> Flights<V> {
     }
 }
 
-fn per_minute(n: u32) -> DefaultKeyedRateLimiter<IpAddr> {
+pub(crate) fn per_minute(n: u32) -> DefaultKeyedRateLimiter<IpAddr> {
     RateLimiter::keyed(Quota::per_minute(NonZeroU32::new(n).unwrap()))
 }
 
@@ -101,7 +101,7 @@ async fn shielded_supply(s: &AppState) -> Result<Option<f64>, ApiError> {
         .map(|(sh, sup)| sh as f64 / sup as f64))
 }
 
-async fn tip(s: &AppState) -> Result<u64, ApiError> {
+pub(crate) async fn tip(s: &AppState) -> Result<u64, ApiError> {
     crate::routes::tip(&s.db)
         .await?
         .map(|h| h.max(0) as u64)
@@ -112,14 +112,14 @@ async fn tip(s: &AppState) -> Result<u64, ApiError> {
 // Gossip
 
 #[derive(Clone, Serialize)]
-struct Line {
-    text: String,
+pub(crate) struct Line {
+    pub(crate) text: String,
     tone: &'static str,
 }
 
-struct BlockFacts {
-    height: i64,
-    txs: i64,
+pub(crate) struct BlockFacts {
+    pub(crate) height: i64,
+    pub(crate) txs: i64,
     size: i64,
     fees: Option<i64>,
     pool: Option<String>,
@@ -131,14 +131,30 @@ struct BlockFacts {
 }
 
 impl BlockFacts {
-    fn kind(&self, k: &str) -> i64 {
+    #[cfg(test)]
+    pub(crate) fn sample() -> Self {
+        Self {
+            height: 3_101_240,
+            txs: 12,
+            size: 45_000,
+            fees: Some(120_000),
+            pool: Some("ViaBTC".into()),
+            gap: Some(80),
+            kinds: vec![("shielded".into(), 8), ("transparent".into(), 4)],
+            mempool: 3,
+            price: Some((41.5, -2.25)),
+            shielded_supply: Some(0.31),
+        }
+    }
+
+    pub(crate) fn kind(&self, k: &str) -> i64 {
         self.kinds
             .iter()
             .find(|(n, _)| n == k)
             .map_or(0, |(_, c)| *c)
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         let mut f = vec![format!(
             "Block {} was just mined by {}.",
             self.height,
@@ -191,7 +207,7 @@ fn shout(text: String) -> Line {
     }
 }
 
-fn gossip_template(f: &BlockFacts) -> Vec<Line> {
+pub(crate) fn gossip_template(f: &BlockFacts) -> Vec<Line> {
     let shielded =
         f.kind("shielded") + f.kind("shielding") + f.kind("deshielding") + f.kind("mixed");
     let mut lines = vec![shout(format!("All aboard! Block {} is leaving!", f.height))];
@@ -253,7 +269,7 @@ fn gossip_template(f: &BlockFacts) -> Vec<Line> {
     lines
 }
 
-async fn block_facts(s: &AppState, h: i64) -> Result<Option<BlockFacts>, ApiError> {
+pub(crate) async fn block_facts(s: &AppState, h: i64) -> Result<Option<BlockFacts>, ApiError> {
     /// height, tx count, size, fees, pool, seconds since the previous block
     type Row = (i64, i32, i32, Option<i64>, Option<String>, Option<i64>);
     let row: Option<Row> = sqlx::query_as(

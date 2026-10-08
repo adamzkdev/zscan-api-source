@@ -11,6 +11,7 @@ mod nft_markets;
 mod presence;
 mod routes;
 mod street;
+mod street_agents;
 mod street_chat;
 mod street_llm;
 mod street_plots;
@@ -274,6 +275,8 @@ async fn main() -> Result<()> {
         .route("/street/presence", get(presence::handler))
         .route("/street/chat", post(street_chat::chat))
         .route("/street/gossip", get(street::gossip))
+        .route("/street/agents", get(street_agents::agents))
+        .route("/street/people", get(street_agents::people))
         .route("/street/paper", get(street::paper))
         .route("/street/mayor", get(street::mayor))
         .route("/street/events", get(street::events))
