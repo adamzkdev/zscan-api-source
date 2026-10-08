@@ -395,7 +395,7 @@ async fn model_turn(
         if !SPOTS.iter().any(|(k, _)| *k == go) {
             continue;
         }
-        let Some(thought) = field(&x["thought"], 70, &facts) else {
+        let Some(thought) = field(&x["thought"], 110, &facts) else {
             continue;
         };
         a.go = go.into();
@@ -405,14 +405,14 @@ async fn model_turn(
             .filter(|m| !m.is_empty() && m.chars().all(|c| c.is_alphabetic() || c == '-'))
             .unwrap_or_else(|| "fine".into());
         a.thought = thought;
-        a.doing = field(&x["doing"], 40, &facts).unwrap_or_else(|| {
+        a.doing = field(&x["doing"], 60, &facts).unwrap_or_else(|| {
             DOING
                 .iter()
                 .find(|(k, _)| *k == go)
                 .map_or("hanging around", |(_, d)| d)
                 .into()
         });
-        a.greet = field(&x["greet"], 60, &facts).unwrap_or_else(|| "Hey there!".into());
+        a.greet = field(&x["greet"], 100, &facts).unwrap_or_else(|| "Hey there!".into());
         a.with = None;
         seen += 1;
     }
@@ -439,7 +439,7 @@ async fn model_turn(
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|l| field(l, 60, &facts))
+            .filter_map(|l| field(l, 90, &facts))
             .take(4)
             .collect();
         if lines.len() < 2 {
