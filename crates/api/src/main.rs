@@ -15,6 +15,7 @@ mod street_agents;
 mod street_chat;
 mod street_llm;
 mod street_plots;
+mod street_works;
 mod ws;
 mod zips;
 
@@ -177,6 +178,9 @@ async fn main() -> Result<()> {
     if env_or("STREET_PAPER", default_on) != "0" {
         tokio::spawn(street::paper_loop(state.clone()));
     }
+    if env_or("STREET_WORKS", default_on) != "0" {
+        tokio::spawn(street_works::run(state.clone()));
+    }
     if env_or("ZIPS", "1") != "0" {
         tokio::spawn(zips::run(state.http.clone()));
     }
@@ -280,6 +284,8 @@ async fn main() -> Result<()> {
         .route("/street/paper", get(street::paper))
         .route("/street/mayor", get(street::mayor))
         .route("/street/events", get(street::events))
+        .route("/street/works", get(street_works::works))
+        .route("/street/works/vote", post(street_works::vote))
         .route("/street/memory", get(street::memory).post(street::remember))
         .route(
             "/street/plots",

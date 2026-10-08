@@ -132,7 +132,7 @@ const DOING: &[(&str, &str)] = &[
 
 const CAST: usize = 12;
 
-fn mix(mut x: u64) -> u64 {
+pub(crate) fn mix(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -146,15 +146,15 @@ fn pick<'a>(list: &[&'a str], id: i32, salt: u64) -> &'a str {
 #[derive(Clone, Serialize)]
 pub struct Persona {
     id: i32,
-    name: &'static str,
-    job: &'static str,
+    pub(crate) name: &'static str,
+    pub(crate) job: &'static str,
     #[serde(rename = "trait")]
-    temper: &'static str,
+    pub(crate) temper: &'static str,
     take: &'static str,
     home: &'static str,
 }
 
-fn persona(id: i32) -> Persona {
+pub(crate) fn persona(id: i32) -> Persona {
     Persona {
         id,
         name: pick(NAMES, id, 1),
@@ -166,7 +166,7 @@ fn persona(id: i32) -> Persona {
 }
 
 impl Persona {
-    fn line(&self) -> String {
+    pub(crate) fn line(&self) -> String {
         format!(
             "#{} {}: {} from {}; {}; {}.",
             self.id, self.name, self.job, self.home, self.temper, self.take
@@ -175,7 +175,7 @@ impl Persona {
 }
 
 /// The day's cast: twelve zkSNARKs picked by the UTC date, no two with the same name.
-fn cast_of(day: i64) -> Vec<i32> {
+pub(crate) fn cast_of(day: i64) -> Vec<i32> {
     let mut ids = Vec::new();
     let mut names = Vec::new();
     let mut k = 0u64;
