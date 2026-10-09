@@ -140,7 +140,10 @@ pub async fn intent(
     ) {
         return Ok(crate::too_many_requests(wait, "Slow down"));
     }
-    let finite = |v: Option<f32>| v.filter(|v| v.is_finite() && v.abs() < 10_000.0).unwrap_or(0.0);
+    let finite = |v: Option<f32>| {
+        v.filter(|v| v.is_finite() && v.abs() < 10_000.0)
+            .unwrap_or(0.0)
+    };
     let (payload, text) = match req.action.as_str() {
         "mark" | "guestbook" => {
             let text = clean(&req.text, TEXT_MAX);
@@ -150,7 +153,9 @@ pub async fn intent(
             let place = req.place.as_deref().unwrap_or("street");
             if place.is_empty()
                 || place.len() > PLACE_MAX
-                || !place.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                || !place
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             {
                 return Err(bad_request("bad place"));
             }
@@ -168,12 +173,13 @@ pub async fn intent(
             if round != tip / ROUND {
                 return Err(bad_request("voting for that round is closed"));
             }
-            let name: Option<String> =
-                sqlx::query_scalar("SELECT name FROM street_projects WHERE round = $1 AND idx = $2")
-                    .bind(round as i32)
-                    .bind(idx)
-                    .fetch_optional(&s.db.pool)
-                    .await?;
+            let name: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM street_projects WHERE round = $1 AND idx = $2",
+            )
+            .bind(round as i32)
+            .bind(idx)
+            .fetch_optional(&s.db.pool)
+            .await?;
             let Some(name) = name else {
                 return Err(bad_request("no such project"));
             };
@@ -447,7 +453,15 @@ pub async fn hide(
 // ---------------------------------------------------------------------------------------------
 // Playing the payments
 
-type Payment = (String, String, i32, i32, i64, Option<String>, Option<String>);
+type Payment = (
+    String,
+    String,
+    i32,
+    i32,
+    i64,
+    Option<String>,
+    Option<String>,
+);
 
 /// Plays one payment; returns its outcome.
 async fn play(s: &AppState, p: &Payment) -> anyhow::Result<&'static str> {
@@ -612,15 +626,23 @@ mod tests {
     fn refs_are_base32() {
         let r = new_ref(b"x");
         assert_eq!(r.len(), 8);
-        assert!(r.bytes().all(|b| b.is_ascii_uppercase() || (b'2'..=b'7').contains(&b)));
+        assert!(r
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || (b'2'..=b'7').contains(&b)));
         assert_ne!(r, new_ref(b"x"));
     }
 
     #[test]
     fn memo_texts() {
-        assert_eq!(memo_text("ZS1:ABCDEFGH\nPraise the sun", "ABCDEFGH", 300), "Praise the sun");
+        assert_eq!(
+            memo_text("ZS1:ABCDEFGH\nPraise the sun", "ABCDEFGH", 300),
+            "Praise the sun"
+        );
         assert_eq!(memo_text("ZS1:ABCDEFGH", "ABCDEFGH", 300), "");
-        assert_eq!(memo_text("hi ZS1:ABCDEFGH there", "ABCDEFGH", 300), "hi  there");
+        assert_eq!(
+            memo_text("hi ZS1:ABCDEFGH there", "ABCDEFGH", 300),
+            "hi  there"
+        );
         assert_eq!(clean("a\u{7}b\n\n\n\nc  ", 300), "ab\n\nc");
         assert_eq!(clean("x".repeat(400).as_str(), 300).len(), 300);
     }

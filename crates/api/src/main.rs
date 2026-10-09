@@ -16,6 +16,7 @@ mod street_chat;
 mod street_llm;
 mod street_pay;
 mod street_plots;
+mod street_wallets;
 mod street_works;
 mod ws;
 mod zips;
@@ -184,6 +185,9 @@ async fn main() -> Result<()> {
     }
     // on when STREET_PAY_ADDRESS is set
     tokio::spawn(street_pay::run(state.clone()));
+    if env_or("STREET_WALLETS", default_on) != "0" {
+        tokio::spawn(street_wallets::run(state.clone()));
+    }
     if env_or("ZIPS", "1") != "0" {
         tokio::spawn(zips::run(state.http.clone()));
     }
@@ -298,6 +302,7 @@ async fn main() -> Result<()> {
         .route("/street/marks/{id}/{kind}", post(street_pay::rate))
         .route("/street/guestbook", get(street_pay::guestbook))
         .route("/street/tips", get(street_pay::tips))
+        .route("/street/wallets", get(street_wallets::wallets))
         .route(
             "/street/plots",
             get(street_plots::list).post(street_plots::save),
