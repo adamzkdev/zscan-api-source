@@ -2,6 +2,7 @@
 //! records value-pool snapshots and tracks the mempool.
 
 mod alerts;
+mod street_pay;
 mod treasuries;
 
 use std::time::Duration;
@@ -86,6 +87,12 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    if std::env::args().nth(1).as_deref() == Some("street-keygen") {
+        let lwd = Lwd::connect_with(&env_or("LWD_URL", DEFAULT_LWD), 5.0)?;
+        let (tip, _) = lwd.tip().await.context("lightwalletd unreachable")?;
+        return street_pay::keygen(tip);
+    }
+
     let cfg = Config::from_env()?;
     let db = Db::connect(&cfg.database_url, 16).await?;
     db.migrate().await?;
@@ -153,6 +160,10 @@ async fn main() -> Result<()> {
         let lag = cfg.inscriptions_lag;
         move || treasuries::run(ctx, lag).boxed()
     }));
+    let street_pay = tokio::spawn(supervise("street_pay", {
+        let lag = env_or("STREET_PAY_LAG", "1").parse()?;
+        move || street_pay::run(ctx, lag).boxed()
+    }));
     let retention = tokio::spawn(supervise("retention", {
         let days = cfg.tx_retention_days;
         move || retention(ctx, days).boxed()
@@ -174,6 +185,7 @@ async fn main() -> Result<()> {
         nft_enrich,
         alerts,
         treasuries,
+        street_pay,
         retention
     );
     Ok(())

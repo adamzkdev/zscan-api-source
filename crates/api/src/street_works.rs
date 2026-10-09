@@ -317,7 +317,8 @@ async fn propose(s: &AppState, round: u64) -> anyhow::Result<()> {
 /// site at `start`.
 async fn award(s: &AppState, round: u64, start: u64) -> anyhow::Result<()> {
     let rows: Vec<(i16, i64, i64)> = sqlx::query_as(
-        "SELECT p.idx, (SELECT count(*) FROM street_votes v WHERE v.round = p.round AND v.idx = p.idx),
+        "SELECT p.idx, (SELECT count(*) FROM street_votes v WHERE v.round = p.round AND v.idx = p.idx)
+                + (SELECT count(*) FROM street_sealed_votes v WHERE v.round = p.round AND v.idx = p.idx),
                 jsonb_array_length(p.backers)::int8
          FROM street_projects p WHERE p.round = $1 ORDER BY p.idx",
     )
@@ -397,10 +398,11 @@ pub async fn run(s: AppState) {
 async fn snapshot(s: &AppState) -> Result<Value, ApiError> {
     let tip = street::tip(s).await?;
     let round = tip / ROUND;
-    type P = (i16, i32, String, String, Value, Value, i64);
+    type P = (i16, i32, String, String, Value, Value, i64, i64);
     let projects: Vec<P> = sqlx::query_as(
         "SELECT p.idx, p.architect, p.name, p.pitch, p.plan, p.backers,
-                (SELECT count(*) FROM street_votes v WHERE v.round = p.round AND v.idx = p.idx)
+                (SELECT count(*) FROM street_votes v WHERE v.round = p.round AND v.idx = p.idx),
+                (SELECT count(*) FROM street_sealed_votes v WHERE v.round = p.round AND v.idx = p.idx)
          FROM street_projects p WHERE p.round = $1 ORDER BY p.idx",
     )
     .bind(round as i32)
@@ -460,9 +462,9 @@ async fn snapshot(s: &AppState) -> Result<Value, ApiError> {
         "start": round * ROUND,
         "end": (round + 1) * ROUND,
         "stopped": tip_empty,
-        "proposals": projects.into_iter().map(|(idx, a, name, pitch, plan, backers, votes)| {
+        "proposals": projects.into_iter().map(|(idx, a, name, pitch, plan, backers, votes, sealed)| {
             json!({ "idx": idx, "architect": who(a), "name": name, "pitch": pitch, "plan": plan,
-                    "backers": backed(&backers), "votes": votes })
+                    "backers": backed(&backers), "votes": votes, "sealed": sealed })
         }).collect::<Vec<_>>(),
         "sites": sites.into_iter().map(|(r, idx, site, start, votes, a, name, pitch, plan, backers, work)| {
             let need = need(&plan);

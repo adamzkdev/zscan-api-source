@@ -23,3 +23,9 @@ tracing-subscriber.workspace = true
 # A copy of the explorer's scanner crate (adamzkdev/zscan wasm/ at 610d572): that repo is
 # private, so the Railway build can't fetch it. Keep the two in sync.
 zscan-wasm = { path = "../scanner" }
+# ZStreet's pay address (`street-keygen`): same versions as the scanner's.
+orchard = { version = "=0.15.5", default-features = false, features = ["std"] }
+zcash_address = "=0.13.0"
+zcash_protocol = "=0.10.6"
+zip32 = "0.2"
+bip0039 = "0.12"
