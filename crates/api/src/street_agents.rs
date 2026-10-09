@@ -104,6 +104,254 @@ const HOMES: &[&str] = &[
     "Downtown",
 ];
 
+/// How they talk (the client pairs each with a greeting, same order).
+const VOICES: &[&str] = &[
+    "talks fast in run-on sentences and jumps from one topic to the next",
+    "short, clipped sentences; never uses five words when two will do",
+    "old-fashioned and very polite, calls everyone 'friend'",
+    "Gen-Z slang ('lowkey', 'no cap', 'it's giving'), all lowercase energy",
+    "sailor talk from years at the Port ('aye', 'landlubber', weather sayings)",
+    "explains everything with food metaphors",
+    "bone-dry deadpan, says absurd things with a straight face",
+    "whispers and looks over their shoulder, as if everything were classified",
+    "theatrical, speaks like a stage actor in a tragedy",
+    "drops Japanese words ('ne', 'sugoi', 'yabai', 'maji de')",
+    "answers questions with more questions",
+    "narrates life like a sports commentator",
+    "gentle and slow, with long pauses (...) and carefully chosen words",
+    "blunt, no filter, says exactly what they think",
+    "pedantic nerd who loves exact numbers and corrects people",
+    "grandparent energy, calls you 'kiddo', rambles about the old days",
+    "wildly enthusiastic, everything is THE BEST",
+    "poetic, notices the light, the rain, the sounds of the street",
+    "pushy salesperson, always pitching some deal",
+    "film-noir detective, narrates in hard-boiled one-liners",
+    "complains about everything, but in a funny way",
+    "mixes French in ('bon', 'voila', 'oh la la', 'bref')",
+    "laid-back surfer drawl ('dude', 'chill', 'gnarly')",
+    "stiff bureaucrat who cites rules, forms and procedures",
+    "distracted mumbler, always mid-thought about something else",
+    "flirty and teasing, hands out cheeky compliments",
+    "gamer who treats everything as a quest, a boss fight or a speedrun",
+    "philosopher who turns small talk into big questions",
+    "keeps talking to their imaginary cat, Byte, mid-sentence",
+    "humble-bragger who name-drops the city's fanciest places",
+    "anxious over-explainer who apologises constantly",
+    "incurable pun-maker, can't resist a terrible pun",
+];
+const QUIRKS: &[&str] = &[
+    "hums the bus horn tune without noticing",
+    "counts things out loud",
+    "is always eating something",
+    "checks the mempool on a cracked old flip phone",
+    "collects a bus ticket from every block",
+    "never, ever sits down",
+    "has named every pigeon on the avenue",
+    "wears sunglasses at night",
+    "writes down overheard conversations in a notebook",
+    "taps the side of their head when thinking",
+    "finishes other people's sentences, usually wrong",
+    "is always cold, wrapped in a huge scarf",
+    "salutes the zkSNARK of Liberty every time they pass it",
+    "laughs at their own jokes before the punchline",
+    "rates everything out of ten",
+    "is forever losing their keys",
+    "talks to plants",
+    "does coin tricks with an old ZEC token",
+    "won't step on the cracks in the pavement",
+    "carries an umbrella even when it's dry",
+    "snacks on persimmons stolen from the orchard",
+    "stretches constantly, like a cat",
+    "doodles QR codes on napkins",
+    "flips a lucky coin before every decision",
+    "photographs every sunset",
+    "whistles whenever a new block lands",
+    "quotes yesterday's ZStreet Daily headlines",
+    "reads fortunes in the last digits of the block hash",
+    "does push-ups at the bus stop",
+    "reties their shoelaces when nervous",
+    "always has fresh gossip about the mayor",
+    "keeps a tiny bonsai in their coat pocket",
+];
+const PHRASES: &[&str] = &[
+    "Shielded or nothing.",
+    "The bus waits for no one.",
+    "Not my block, not my problem.",
+    "Every empty block is a nap.",
+    "Trust the proof.",
+    "Ten out of ten, no notes.",
+    "Classic.",
+    "The mempool remembers.",
+    "Ask me again after the next block.",
+    "Small fees, big dreams.",
+    "Zero knowledge, full heart.",
+    "That's above my pay grade.",
+    "Keep your keys, keep your peace.",
+    "Seventy-five seconds is a lifetime.",
+    "Wild times on the avenue.",
+    "Pigeons know things.",
+    "If it's transparent, it's gossip.",
+    "Sleep is for empty blocks.",
+    "Rain's good for the neon.",
+    "Don't tell the mayor.",
+    "Proof or it didn't happen.",
+    "Everyone's a miner on the inside.",
+    "Life's a mempool, wait your turn.",
+    "Big if true.",
+    "Hold my persimmon.",
+    "Orchard forever.",
+    "I've seen worse.",
+    "That's the spirit.",
+    "Easy, tiger.",
+    "Fair enough.",
+    "We ride at dawn. Or at the next block.",
+    "Not advice, just vibes.",
+    "The city provides.",
+    "Zero clue, zero knowledge.",
+    "One block at a time.",
+    "Chef's kiss.",
+    "Absolutely not.",
+    "Say less.",
+    "Keep it shielded, keep it moving.",
+    "Oh, it's on.",
+];
+const LOVES: &[&str] = &[
+    "the 3 a.m. ramen in the shotengai",
+    "the ZEC Flyer at sunset",
+    "rainy nights and wet neon",
+    "the warm hum of the Proof Factory",
+    "jazz nights at the Opera",
+    "the fattest koi in the Orchard pond",
+    "a full bus leaving right on time",
+    "old Sprout-era war stories",
+    "melon soda from the vending machines",
+    "karaoke in Downtown",
+    "the view from the Needle's deck",
+    "Block Stadium on match days",
+    "secondhand books from the Binhai Library",
+    "the bakery by the Marina",
+    "fireworks after a big block",
+    "the quiet of the persimmon orchard",
+    "noodles so spicy they hurt",
+    "the Colosseum's Proof Games",
+    "a perfectly folded paper wallet",
+    "watching the ferries cross the bay",
+    "the street cats",
+    "the arcade in ZK Tower",
+    "iced matcha",
+    "long tram rides with no destination",
+    "the first bus of the morning",
+    "clacky mechanical keyboards",
+    "taking the long way home",
+    "Big Ben striking midnight",
+    "card games with strangers",
+    "sunrise over the Golden Gate",
+    "a heated argument",
+    "people-watching from the fountain",
+];
+const HATES: &[&str] = &[
+    "people who reuse transparent addresses",
+    "empty blocks",
+    "soggy noodles",
+    "the selfie crowd at the Louvre pyramid",
+    "the rush-hour bus crowd",
+    "loud courier scooters",
+    "anyone who says 'wen moon'",
+    "pigeons, every last one",
+    "wet socks",
+    "slow walkers on the avenue",
+    "the Reserve's stuffy lobby",
+    "small talk about the weather",
+    "losing umbrellas",
+    "being called by the wrong name",
+    "the vending machine that eats coins",
+    "spoilers",
+    "the mayor's decrees",
+    "cold coffee",
+    "queue-jumpers at the MEMPOOL shop",
+    "flickering neon",
+    "high fees",
+    "the wind on the Golden Gate",
+    "early mornings",
+    "people who never shield",
+    "pineapple on pizza",
+    "the stadium's hot dogs",
+    "lift music",
+    "being rushed",
+    "bad puns",
+    "the Port at low tide",
+    "the lift queue at the Needle",
+    "running late for a block",
+];
+const SECRETS: &[&str] = &[
+    "once fell asleep on the bus and rode three blocks before waking up",
+    "is secretly terrified of pigeons",
+    "wrote a love letter in a shielded memo and never shared the viewing key",
+    "has never actually been up the Needle",
+    "used to be a transparent-address maximalist",
+    "sings in the shower at full volume",
+    "keeps a diary of every empty block",
+    "can't swim but works right by the water",
+    "found a ZEC coin in the fountain and kept it",
+    "is writing a novel about the city, and it's terrible",
+    "swears they saw the zkSNARK of Liberty blink",
+    "still sleeps with a nightlight",
+    "has a second job nobody knows about",
+    "is scared of the Pyramid's labyrinth",
+    "never learned to ride a bike",
+    "nods along but doesn't really understand zk-proofs",
+    "cried at the Opera last week",
+    "keeps their seed phrase in a cookie tin",
+    "has a crush on someone who works at the Reserve",
+    "got banned from the arcade for a week",
+    "talks to the koi when they're sad",
+    "keeps saying they'll leave the city, never will",
+    "doesn't care about crypto, only about the people",
+    "once lost a whole paper wallet in the laundry",
+];
+const DREAMS: &[&str] = &[
+    "open a noodle bar on the avenue",
+    "ride the very first NU7 bus",
+    "climb the Eiffel Tower at night",
+    "win the Proof Games",
+    "get their portrait hung in the Museum",
+    "sail out to the prison island",
+    "run for mayor",
+    "write the ZStreet Daily's front page",
+    "see a block with a thousand transactions",
+    "understand zk-proofs for real",
+    "buy a flat in ZK Tower",
+    "start a band that plays the Opera",
+    "visit every landmark in a single day",
+    "get the whole city to shield",
+    "get a building of theirs voted up in City Works",
+    "become a famous pixel artist",
+    "open a cat cafe",
+    "teach kids why privacy matters",
+    "own their own taxi",
+    "find the Pyramid's genesis chest",
+    "throw the biggest party Block Stadium has seen",
+    "travel beyond the bay",
+    "become a librarian at Binhai",
+    "retire to a flat by the Marina",
+];
+const AGES: &[&str] = &[
+    "19",
+    "22",
+    "24",
+    "27",
+    "29",
+    "31",
+    "34",
+    "38",
+    "42",
+    "47",
+    "53",
+    "61",
+    "68",
+    "74",
+];
+
 /// Where a citizen can go: the street's activity spots (the client knows each one), or home.
 const SPOTS: &[(&str, &str)] = &[
     ("bench", "a bench on the plaza"),
@@ -143,6 +391,15 @@ fn pick<'a>(list: &[&'a str], id: i32, salt: u64) -> &'a str {
     list[(mix(id as u64 * 131 + salt) % list.len() as u64) as usize]
 }
 
+/// Another citizen's name, never their own (same rule as the client).
+fn other(id: i32, salt: u64, own: &str) -> &'static str {
+    let mut i = (mix(id as u64 * 131 + salt) % NAMES.len() as u64) as usize;
+    if NAMES[i] == own {
+        i = (i + 1) % NAMES.len();
+    }
+    NAMES[i]
+}
+
 #[derive(Clone, Serialize)]
 pub struct Persona {
     id: i32,
@@ -152,6 +409,17 @@ pub struct Persona {
     pub(crate) temper: &'static str,
     take: &'static str,
     home: &'static str,
+    age: &'static str,
+    /// How they talk.
+    voice: &'static str,
+    quirk: &'static str,
+    phrase: &'static str,
+    loves: &'static str,
+    hates: &'static str,
+    secret: &'static str,
+    dream: &'static str,
+    friend: &'static str,
+    rival: &'static str,
 }
 
 pub(crate) fn persona(id: i32) -> Persona {
@@ -162,14 +430,37 @@ pub(crate) fn persona(id: i32) -> Persona {
         temper: pick(TRAITS, id, 3),
         take: pick(TAKES, id, 4),
         home: pick(HOMES, id, 5),
+        age: pick(AGES, id, 13),
+        voice: pick(VOICES, id, 6),
+        quirk: pick(QUIRKS, id, 7),
+        phrase: pick(PHRASES, id, 8),
+        loves: pick(LOVES, id, 9),
+        hates: pick(HATES, id, 10),
+        secret: pick(SECRETS, id, 11),
+        dream: pick(DREAMS, id, 12),
+        friend: other(id, 14, pick(NAMES, id, 1)),
+        rival: other(id, 15, pick(NAMES, id, 1)),
     }
 }
 
 impl Persona {
     pub(crate) fn line(&self) -> String {
         format!(
-            "#{} {}: {} from {}; {}; {}.",
-            self.id, self.name, self.job, self.home, self.temper, self.take
+            "#{} {} ({}): {} from {}; {}; talks like this: {}; habit: {}; catchphrase \"{}\"; loves {}, hates {}; best friend {}, rival {}; {}.",
+            self.id,
+            self.name,
+            self.age,
+            self.job,
+            self.home,
+            self.temper,
+            self.voice,
+            self.quirk,
+            self.phrase,
+            self.loves,
+            self.hates,
+            self.friend,
+            self.rival,
+            self.take
         )
     }
 }
@@ -371,13 +662,14 @@ async fn model_turn(
         of the place keys), their mood (one word), what they do there (at most 40 characters, \
         e.g. \"arguing about fees with Kenji\"), a short first-person thought (at most 70 \
         characters) and what they would say to a stranger walking past them (at most 60 \
-        characters, friendly or grumpy as fits them, may mention this block), all fitting \
-        their persona, what they did earlier today and this block. Keep \
+        characters), all in that citizen's own way of talking (their 'talks like this', habit and \
+        catchphrase: two citizens must never sound alike), fitting their persona, what they did \
+        earlier today and this block. Keep \
         each one's day coherent: people have reasons, follow up on earlier thoughts, make \
         friends and rivals, react to the block. Pair up four to six couples who go to the same \
         place and talk: write their conversation as 2 to 4 alternating lines, the first by a, \
-        at most 60 characters each, in character, about the block, the city, each other or \
-        their day. Write in English only. Use only facts given: copy any number exactly as \
+        at most 60 characters each, each in their own voice, about the block, the city, each \
+        other, their loves and grudges or their day; friends banter, rivals needle each other. Write in English only. Use only facts given: copy any number exactly as \
         written, never invent amounts, prices or events. No price predictions or financial \
         advice, no hashtags, no emojis. Return strict JSON only: \
         {\"agents\":[{\"id\":0,\"go\":\"bench\",\"mood\":\"happy\",\"doing\":\"...\",\"thought\":\"...\",\"greet\":\"...\"}],\
@@ -617,3 +909,4 @@ mod tests {
         }
     }
 }
+
