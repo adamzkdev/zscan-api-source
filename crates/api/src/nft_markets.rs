@@ -18,7 +18,9 @@ use tokio::sync::Mutex;
 use utoipa::ToSchema;
 use zscan_chain::nft_projects::{self, Project};
 
-const TTL: Duration = Duration::from_secs(300);
+/// Venue data (order book, sales) older than this is refreshed in the background: the ZEC
+/// Reserve's zkSNARKs exchange shows it live.
+const TTL: Duration = Duration::from_secs(20);
 const ZILKROAD: &str = "https://zilkroad.com";
 /// How often the order book is sampled and the latest sales are archived.
 const SNAPSHOT_EVERY: Duration = Duration::from_secs(300);
