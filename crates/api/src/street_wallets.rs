@@ -58,6 +58,8 @@ struct Wallet {
 enum Store {
     Apple(u64),
     Chrome(&'static str),
+    /// Not in a store yet (ZApp): no rating card.
+    None,
 }
 
 const WALLETS: &[Wallet] = &[
@@ -100,6 +102,17 @@ const WALLETS: &[Wallet] = &[
         ],
         store: Store::Chrome("mfoghjbpfanobmnoemoepenjjcmfpmdn"),
         site: "https://zknoir.com",
+    },
+    // ZLab's app: no X account, no store listing yet; its tower shows GitHub only
+    Wallet {
+        key: "zapp",
+        name: "ZApp",
+        handle: "",
+        timelines: &[],
+        tweets: &[],
+        repos: &["ZLabcash/zapp", "ZLabcash/zflip"],
+        store: Store::None,
+        site: "https://github.com/ZLabcash/zapp",
     },
 ];
 
@@ -160,7 +173,9 @@ pub async fn wallets(State(s): State<AppState>) -> Result<Json<Value>, ApiError>
 async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> Result<Value> {
     // fxtwitter says "User not found" now and then: a couple more tries before the old profile
     let mut profile_now = Err(anyhow::anyhow!("not tried"));
-    for attempt in 0..3 {
+    // no X account: no profile to read
+    let attempts = if w.handle.is_empty() { 0 } else { 3 };
+    for attempt in 0..attempts {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(3)).await;
         }
@@ -170,7 +185,9 @@ async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> 
         }
     }
     let profile = profile_now.unwrap_or_else(|e| {
-        tracing::warn!("profile {}: {e:#}", w.handle);
+        if !w.handle.is_empty() {
+            tracing::warn!("profile {}: {e:#}", w.handle);
+        }
         old["profile"].clone()
     });
     let mut tweets = Vec::new();
@@ -257,6 +274,7 @@ async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> 
     let store = match w.store {
         Store::Apple(id) => app_store(http, id).await.ok(),
         Store::Chrome(id) => chrome_store(http, id).await.ok(),
+        Store::None => None,
     };
 
     // nothing at all came back: keep the last feed rather than an empty one
