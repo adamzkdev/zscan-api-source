@@ -1,4 +1,4 @@
-//! ZStreet's wallet towers: ZODL, Vizor and Noir each have a tower in the city, its walls hung with
+//! ZStreet's wallet towers: ZODL, Vizor, Noir and ZLab each have a tower in the city, its walls hung with
 //! their tweets and their story (releases, commits, stars, store ratings). Every quarter hour this
 //! reads the public sources, none of which needs a key: FxTwitter (the open source embed fixer,
 //! api.fxtwitter.com: profiles and whole timelines, paged), X's own embed timeline and
@@ -38,17 +38,17 @@ const NOTES_MAX: usize = 1200;
 /// Tweets read one by one per refresh, at most.
 const SINGLE_MAX: usize = 30;
 
-struct Wallet {
-    key: &'static str,
+pub(crate) struct Wallet {
+    pub(crate) key: &'static str,
     name: &'static str,
     /// The account whose profile heads the tower.
     handle: &'static str,
     /// Timelines read: FxTwitter first, then the embed endpoint (empty for young accounts).
-    timelines: &'static [&'static str],
+    pub(crate) timelines: &'static [&'static str],
     /// Tweets read one by one (the community's, or the account's when its timeline is empty).
     /// `STREET_WALLET_TWEETS_<KEY>` adds more, comma-separated ids.
     tweets: &'static [&'static str],
-    repos: &'static [&'static str],
+    pub(crate) repos: &'static [&'static str],
     store: Store,
     site: &'static str,
 }
@@ -58,11 +58,11 @@ struct Wallet {
 enum Store {
     Apple(u64),
     Chrome(&'static str),
-    /// Not in a store yet (ZApp): no rating card.
+    /// Not in a store yet (ZLab's apps): no rating card.
     None,
 }
 
-const WALLETS: &[Wallet] = &[
+pub(crate) const WALLETS: &[Wallet] = &[
     Wallet {
         key: "zodl",
         name: "Zodl",
@@ -103,16 +103,21 @@ const WALLETS: &[Wallet] = &[
         store: Store::Chrome("mfoghjbpfanobmnoemoepenjjcmfpmdn"),
         site: "https://zknoir.com",
     },
-    // ZLab's app: no X account, no store listing yet; its tower shows GitHub only
+    // ZLab: no X account, no store listing yet; its tower shows GitHub only, a floor per repo
     Wallet {
-        key: "zapp",
-        name: "ZApp",
+        key: "zlab",
+        name: "ZLab",
         handle: "",
         timelines: &[],
         tweets: &[],
-        repos: &["ZLabcash/zapp", "ZLabcash/zflip"],
+        repos: &[
+            "ZLabcash/zapp",
+            "ZLabcash/zapp-chrome",
+            "ZLabcash/zfirm",
+            "ZLabcash/kindlewallet",
+        ],
         store: Store::None,
-        site: "https://github.com/ZLabcash/zapp",
+        site: "https://zlab.cash",
     },
 ];
 
@@ -168,6 +173,52 @@ pub async fn wallets(State(s): State<AppState>) -> Result<Json<Value>, ApiError>
     Ok(Json(Value::Object(out)))
 }
 
+/// A repository just moved (the pulse saw a commit, a release or a pull request): its part of the
+/// wallet's feed is read again now rather than at the next hourly GitHub round, so the lab's boards
+/// show what the zkSNARK announces. Five calls or so.
+pub(crate) async fn refresh_repo(state: &AppState, wallet: &str, r: &str) -> Result<()> {
+    let old: Option<Value> =
+        sqlx::query_scalar("SELECT feed FROM street_wallet_feed WHERE wallet = $1")
+            .bind(wallet)
+            .fetch_optional(&state.db.pool)
+            .await?;
+    let Some(mut feed) = old else { return Ok(()) };
+    let http = &state.http;
+    let (releases, commits, pulls) = (
+        github_releases(http, r).await?,
+        github_commits(http, r).await?,
+        github_pulls(http, r).await?,
+    );
+    let swap = |feed: &mut Value, k: &str, fresh: Vec<Value>, by: &str| {
+        let mut list: Vec<Value> = feed[k]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|v| v["repo"].as_str() != Some(r))
+            .collect();
+        list.extend(fresh);
+        list.sort_by(|a, b| b[by].as_str().cmp(&a[by].as_str()));
+        feed[k] = json!(list);
+    };
+    swap(&mut feed, "releases", releases, "date");
+    swap(&mut feed, "commits", commits, "date");
+    swap(&mut feed, "pulls", pulls, "updated");
+    // the repository card keeps its place among the others
+    if let (Ok(v), Some(list)) = (repo(http, r).await, feed["repos"].as_array_mut()) {
+        match list.iter_mut().find(|x| x["repo"].as_str() == Some(r)) {
+            Some(slot) => *slot = v,
+            None => list.push(v),
+        }
+    }
+    sqlx::query("UPDATE street_wallet_feed SET feed = $2, fetched_at = now() WHERE wallet = $1")
+        .bind(wallet)
+        .bind(&feed)
+        .execute(&state.db.pool)
+        .await?;
+    Ok(())
+}
+
 /// One wallet's feed. Each source on its own: one that fails leaves its part as it was in `old`
 /// (the last feed saved).
 async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> Result<Value> {
@@ -193,7 +244,7 @@ async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> 
     let mut tweets = Vec::new();
     let mut seen = HashSet::new();
     for h in w.timelines {
-        match fx_timeline(http, h).await {
+        match fx_timeline(http, h, FX_PAGES).await {
             Ok(list) => {
                 for t in list {
                     if seen.insert(t["id"].as_str().unwrap_or_default().to_string()) {
@@ -256,12 +307,16 @@ async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> 
                 Ok(v) => repos.push(v),
                 Err(e) => tracing::warn!("github {r}: {e:#}"),
             }
-            if let Ok(list) = github_releases(http, r).await {
-                releases.extend(list);
-            }
-            if let Ok(list) = github_commits(http, r).await {
-                commits.extend(list);
-            }
+            let rels = github_releases(http, r).await;
+            let cs = github_commits(http, r).await;
+            // over GitHub's quota: the Atom feeds for this repository's commits and releases
+            let (atom_commits, atom_releases) = if rels.is_err() || cs.is_err() {
+                crate::street_pulse::atom_fallback(http, r).await
+            } else {
+                Default::default()
+            };
+            releases.extend(rels.unwrap_or(atom_releases));
+            commits.extend(cs.unwrap_or(atom_commits));
             if let Ok(list) = github_pulls(http, r).await {
                 pulls.extend(list);
             }
@@ -279,11 +334,16 @@ async fn load(http: &reqwest::Client, w: &Wallet, old: &Value, github: bool) -> 
 
     // nothing at all came back: keep the last feed rather than an empty one
     anyhow::ensure!(
-        !(tweets.is_empty() && repos.is_empty() && store.is_none() && old.is_null()),
+        !(tweets.is_empty()
+            && repos.is_empty()
+            && commits.is_empty()
+            && store.is_none()
+            && old.is_null()),
         "every source failed"
     );
     let or_old = |v: Value, k: &str| match &v {
-        Value::Array(a) if a.is_empty() => old[k].clone(),
+        // nothing new: the last list, if there was one (a first feed keeps its empty lists)
+        Value::Array(a) if a.is_empty() && !old[k].is_null() => old[k].clone(),
         Value::Null => old[k].clone(),
         _ => v,
     };
@@ -469,12 +529,16 @@ async fn single(http: &reqwest::Client, id: &str) -> Result<(Value, Vec<(String,
     Ok((tweet(&t).context("unreadable tweet")?, linked))
 }
 
-/// An account's timeline from FxTwitter, `FX_PAGES` pages of twenty (its tweets, its reposts).
+/// An account's timeline from FxTwitter, `pages` pages of twenty (its tweets, its reposts).
 /// FxTwitter answers 404 now and then: each page gets a second try.
-async fn fx_timeline(http: &reqwest::Client, handle: &str) -> Result<Vec<Value>> {
+pub(crate) async fn fx_timeline(
+    http: &reqwest::Client,
+    handle: &str,
+    pages: usize,
+) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..FX_PAGES {
+    for _ in 0..pages {
         let mut url = format!("https://api.fxtwitter.com/2/profile/{handle}/statuses");
         if let Some(c) = &cursor {
             url.push_str(&format!("?cursor={}", urlencode(c)));
@@ -700,7 +764,7 @@ async fn profile(http: &reqwest::Client, handle: &str) -> Result<Value> {
     }))
 }
 
-fn github(http: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+pub(crate) fn github(http: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
     let mut req = http
         .get(url)
         .header("Accept", "application/vnd.github+json")

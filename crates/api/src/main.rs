@@ -3,6 +3,7 @@
 mod accounts;
 mod docs;
 mod error;
+mod hashsmash;
 mod ipfs;
 mod market;
 mod models;
@@ -16,6 +17,7 @@ mod street_chat;
 mod street_llm;
 mod street_pay;
 mod street_plots;
+mod street_pulse;
 mod street_wallets;
 mod street_works;
 mod ws;
@@ -187,6 +189,10 @@ async fn main() -> Result<()> {
     tokio::spawn(street_pay::run(state.clone()));
     if env_or("STREET_WALLETS", default_on) != "0" {
         tokio::spawn(street_wallets::run(state.clone()));
+        tokio::spawn(street_pulse::run(state.clone()));
+    }
+    if env_or("HASHSMASH", default_on) != "0" {
+        tokio::spawn(hashsmash::run(state.http.clone()));
     }
     if env_or("ZIPS", "1") != "0" {
         tokio::spawn(zips::run(state.http.clone()));
@@ -303,6 +309,8 @@ async fn main() -> Result<()> {
         .route("/street/guestbook", get(street_pay::guestbook))
         .route("/street/tips", get(street_pay::tips))
         .route("/street/wallets", get(street_wallets::wallets))
+        .route("/street/wallets/pulse", get(street_pulse::pulse))
+        .route("/hashsmash", get(hashsmash::get))
         .route(
             "/street/plots",
             get(street_plots::list).post(street_plots::save),
