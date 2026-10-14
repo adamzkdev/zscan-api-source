@@ -920,6 +920,7 @@ pub async fn archive(db: PgPool) {
         if let Err(e) = snapshot(&db).await {
             tracing::warn!("nft market snapshot: {e:#}");
         }
+        store_apparition_art(&db).await;
         tokio::time::sleep(SNAPSHOT_EVERY).await;
     }
 }
@@ -1245,6 +1246,8 @@ pub async fn atlas(db: &PgPool, p: &Project) -> Option<Atlas> {
         .fetch_one(db)
         .await
         .ok()?;
+    // Replaced pictures don't change the count; they bump this instead.
+    let stored = stored + ART_REPLACED.load(std::sync::atomic::Ordering::Relaxed);
     if let Some((t, n, jpeg)) = cache.get_mut(&p.slug) {
         if *n == stored {
             *t = Instant::now();
@@ -1341,6 +1344,199 @@ async fn warm_atlases(db: PgPool) {
             atlas(&db, p).await;
         }
         tokio::time::sleep(ATLAS_TTL).await;
+    }
+}
+
+/// Pictures replaced in place (an item turned into an Apparition), so atlases rebuild.
+static ART_REPLACED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// One Apparition: a treasury snark transformed after a holder purged 26 others.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Apparition {
+    pub slot: i64,
+    pub item: String,
+    pub name: String,
+    pub traits: Vec<Trait>,
+    /// When it was revealed (its 26 snarks were purged in the same instant).
+    pub unlocked_at: Option<String>,
+    pub ask: Option<i64>,
+    pub last: Option<i64>,
+}
+
+/// A snark purged to reveal an Apparition.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PurgedItem {
+    pub item: String,
+    /// The Apparition it was purged for.
+    pub slot: i64,
+    pub rank: Option<i64>,
+    pub traits: Vec<Trait>,
+    /// Its last sale before the purge, zatoshis.
+    pub last: Option<i64>,
+}
+
+/// The Apparitions experiment: purge 26 snarks, reveal one Apparition.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Apparitions {
+    /// Apparition slots in all.
+    pub slots: i64,
+    pub minted: Option<i64>,
+    pub supply: Option<i64>,
+    pub apparitions: Vec<Apparition>,
+    pub purged: Vec<PurgedItem>,
+}
+
+fn traits_of(v: Option<&Value>) -> Vec<Trait> {
+    v.and_then(|t| t.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| {
+                    Some(Trait {
+                        trait_type: k.clone(),
+                        value: v.as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The Apparitions of a Zilkroad project, with the snarks purged for each, as the venue
+/// reports them.
+pub async fn apparitions(p: &Project) -> Option<Apparitions> {
+    if !is_zilkroad(p) {
+        return None;
+    }
+    let urls = ["apparitions", "apparitions/purged", "stats"]
+        .map(|path| format!("{ZILKROAD}/api/market/{path}"));
+    let (doc, purged, stats, items) = tokio::join!(
+        get_json(&urls[0]),
+        get_json(&urls[1]),
+        get_json(&urls[2]),
+        zilkroad_items(),
+    );
+    let doc = doc?;
+    let by_id: HashMap<&str, &VenueItem> = items
+        .as_deref()
+        .map(|l| l.iter().map(|i| (i.id.as_str(), i)).collect())
+        .unwrap_or_default();
+    let slots = doc.get("slots")?.as_array()?;
+    let apparitions = slots
+        .iter()
+        .filter_map(|s| {
+            let a = s.get("apparition")?;
+            let item = a.get("token")?.as_i64()?.to_string();
+            let known = by_id.get(item.as_str());
+            Some(Apparition {
+                slot: a.get("slot")?.as_i64()?,
+                name: a.get("name")?.as_str()?.to_string(),
+                traits: traits_of(a.get("traits")),
+                unlocked_at: a
+                    .get("unlockedAt")
+                    .and_then(|t| t.as_str())
+                    .map(String::from),
+                ask: known.and_then(|i| i.ask),
+                last: known.and_then(|i| i.last),
+                item,
+            })
+        })
+        .collect();
+    let purged = purged
+        .as_ref()
+        .and_then(|v| v.get("purged"))
+        .and_then(|v| v.as_array())
+        .map(|l| {
+            l.iter()
+                .filter_map(|x| {
+                    let item = x.get("token")?.as_i64()?.to_string();
+                    let known = by_id.get(item.as_str());
+                    Some(PurgedItem {
+                        slot: x.get("slot")?.as_i64()?,
+                        rank: x
+                            .get("rank")
+                            .and_then(|r| r.as_i64())
+                            .or(known.and_then(|i| i.rank)),
+                        traits: known.map(|i| i.traits.clone()).unwrap_or_default(),
+                        last: known.and_then(|i| i.last),
+                        item,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let num = |k: &str| {
+        stats
+            .as_ref()
+            .and_then(|s| s.get(k))
+            .and_then(|n| n.as_i64())
+    };
+    Some(Apparitions {
+        slots: slots.len() as i64,
+        minted: num("minted"),
+        supply: num("supply"),
+        apparitions,
+        purged,
+    })
+}
+
+/// The picture of an item that became an Apparition, if it did: the venue serves the new art
+/// only with the Apparition's number, and the old one at the plain address.
+async fn store_apparition_art(db: &PgPool) {
+    static DONE: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let done = DONE.get_or_init(Default::default);
+    for p in nft_projects::projects().iter().filter(|p| is_zilkroad(p)) {
+        let Some(doc) = get_json(&format!("{ZILKROAD}/api/market/apparitions")).await else {
+            continue;
+        };
+        let arts: Vec<(String, String)> = doc
+            .get("slots")
+            .and_then(|s| s.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|s| {
+                let a = s.get("apparition")?;
+                let art = a.get("art")?.as_str()?;
+                // Only the venue's own art path, never an arbitrary URL.
+                let item = a.get("token")?.as_i64()?.to_string();
+                art.starts_with("/api/art/")
+                    .then(|| (item, art.to_string()))
+            })
+            .collect();
+        for (item, art) in arts {
+            let key = format!("{}/{item}/{art}", p.slug);
+            if done.lock().await.contains(&key) {
+                continue;
+            }
+            match crate::ipfs::image(&format!("{ZILKROAD}{art}"), None).await {
+                Ok((ctype, body)) => {
+                    let r = sqlx::query(
+                        "INSERT INTO nft_item_images (project, item, content_type, body)
+                         VALUES ($1, $2, $3, $4)
+                         ON CONFLICT (project, item) DO UPDATE
+                         SET content_type = EXCLUDED.content_type, body = EXCLUDED.body
+                         WHERE nft_item_images.body IS DISTINCT FROM EXCLUDED.body",
+                    )
+                    .bind(&p.slug)
+                    .bind(&item)
+                    .bind(&ctype)
+                    .bind(&body)
+                    .execute(db)
+                    .await;
+                    match r {
+                        Ok(r) => {
+                            if r.rows_affected() > 0 {
+                                ART_REPLACED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                tracing::info!(project = %p.slug, item, "apparition art stored");
+                            }
+                            done.lock().await.insert(key);
+                        }
+                        Err(e) => tracing::warn!("apparition art {item}: {e:#}"),
+                    }
+                }
+                Err(e) => tracing::debug!("apparition art {art}: {e:#}"),
+            }
+            tokio::time::sleep(BACKFILL_PAUSE).await;
+        }
     }
 }
 

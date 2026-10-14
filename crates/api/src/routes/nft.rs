@@ -927,6 +927,21 @@ pub struct MapImageQuery {
     pub size: Option<String>,
 }
 
+/// The Apparitions of a marketplace-kept collection: each one revealed by purging 26 items,
+/// with the items purged for it.
+#[utoipa::path(get, path = "/v1/collections/{slug}/apparitions", params(("slug" = String, Path)),
+    responses((status = 200, body = nft_markets::Apparitions), (status = 404)), tag = "inscriptions")]
+pub async fn collection_apparitions(
+    Path(slug): Path<String>,
+) -> ApiResult<nft_markets::Apparitions> {
+    let p = nft_projects::by_slug(&slug)
+        .ok_or_else(|| ApiError::NotFound(format!("Collection {slug} not found")))?;
+    nft_markets::apparitions(p)
+        .await
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("No apparitions for {slug}")))
+}
+
 /// Thumbnails of every item of a marketplace-kept collection in one JPEG, 100 per row, item
 /// `n` at slot `n - 1` (see `atlas` in the map).
 #[utoipa::path(get, path = "/v1/collections/{slug}/map/image",

@@ -110,7 +110,7 @@ protocol makes public."#;
         compact::range, compact::tx_outputs, bridges::overview, bridges::events, bridges::flows,
         inscriptions::list, inscriptions::stats, inscriptions::detail, inscriptions::content,
         inscriptions::image, inscriptions::by_address,
-        nft::collections, nft::collection, nft::collection_stats, nft::collection_map, nft::collection_map_image, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
+        nft::collections, nft::collection, nft::collection_stats, nft::collection_map, nft::collection_map_image, nft::collection_apparitions, nft::logo, nft::venue_item, nft::venue_item_image, nft::artwork_image,
         nft::sales, news::list, news::sources, zips::list, zips::detail, treasuries::list, treasuries::detail,
         market::overview, market::daily, market::coins, market::assets, market::assets_daily,
         crate::ws::handler,

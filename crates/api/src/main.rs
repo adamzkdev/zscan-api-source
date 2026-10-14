@@ -274,6 +274,10 @@ async fn main() -> Result<()> {
             get(routes::nft::collection_map_image),
         )
         .route(
+            "/collections/{slug}/apparitions",
+            get(routes::nft::collection_apparitions),
+        )
+        .route(
             "/collections/{slug}/items/{id}",
             get(routes::nft::venue_item),
         )
