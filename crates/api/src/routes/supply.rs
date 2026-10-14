@@ -13,7 +13,7 @@ use zscan_chain::upgrades;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
-#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct IssuanceDay {
     pub day: DateTime<Utc>,
     pub blocks: i64,
@@ -26,7 +26,7 @@ pub struct IssuanceDay {
     pub burned: i64,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AuditSummary {
     pub checks: i64,
     pub failed: i64,
@@ -34,7 +34,7 @@ pub struct AuditSummary {
     pub last_checked: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Supply {
     pub height: i32,
     /// Total ZEC in existence per the node (zatoshis).
@@ -70,6 +70,34 @@ const MAX_SUPPLY: i64 = 21_000_000 * 100_000_000;
 /// Supply, issuance schedule and fee burn, computed from Zcash consensus rules.
 #[utoipa::path(get, path = "/v1/supply", responses((status = 200, body = Supply)), tag = "supply")]
 pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+    use tokio::sync::Mutex;
+    // Summing every block's burn takes seconds now that history reaches genesis: answer from
+    // the last result and refresh it in the background once it's a minute old.
+    static CACHE: OnceLock<Mutex<Option<(Instant, Supply)>>> = OnceLock::new();
+    static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let cache = CACHE.get_or_init(Default::default);
+    let cached = cache.lock().await.clone();
+    if let Some((t, v)) = cached {
+        if t.elapsed() >= Duration::from_secs(60)
+            && !REFRESHING.swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            tokio::spawn(async move {
+                if let Ok(v) = compute(&s).await {
+                    *cache.lock().await = Some((Instant::now(), v));
+                }
+                REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+            });
+        }
+        return Ok(Json(v));
+    }
+    let v = compute(&s).await?;
+    *cache.lock().await = Some((Instant::now(), v.clone()));
+    Ok(Json(v))
+}
+
+async fn compute(s: &AppState) -> Result<Supply, ApiError> {
     let snap: Option<(i32, i64, i64)> = sqlx::query_as(
         "SELECT height, supply, lockbox FROM pool_snapshots ORDER BY height DESC LIMIT 1",
     )
@@ -112,7 +140,7 @@ pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
     .await?;
 
     let issued = issued_24h.unwrap_or(0);
-    Ok(Json(Supply {
+    Ok(Supply {
         height,
         supply,
         max_supply: MAX_SUPPLY,
@@ -133,9 +161,9 @@ pub async fn supply(State(s): State<AppState>) -> ApiResult<Supply> {
         avg_block_time,
         target_block_time: upgrades::target_spacing(height as u32 + 1),
         economics_pending,
-        audit: audit_summary(&s).await?,
+        audit: audit_summary(s).await?,
         daily,
-    }))
+    })
 }
 
 async fn audit_summary(s: &AppState) -> Result<AuditSummary, ApiError> {
