@@ -869,24 +869,39 @@ async fn recent_archived(
     .await?)
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ItemImageQuery {
+    /// `1`: the picture as the venue first published it. For an Apparition, the snark it was
+    /// before its transformation.
+    pub before: Option<String>,
+}
+
 /// The picture of a marketplace-kept item, relayed.
-#[utoipa::path(get, path = "/v1/collections/{slug}/items/{id}/image", params(("slug" = String, Path), ("id" = String, Path)),
+#[utoipa::path(get, path = "/v1/collections/{slug}/items/{id}/image", params(("slug" = String, Path), ("id" = String, Path), ItemImageQuery),
     responses((status = 200, description = "Image"), (status = 404), (status = 502)), tag = "inscriptions")]
 pub async fn venue_item_image(
     State(s): State<AppState>,
     Path((slug, id)): Path<(String, String)>,
+    Query(q): Query<ItemImageQuery>,
 ) -> Result<Response, ApiError> {
     use axum::response::IntoResponse;
     let p = nft_projects::by_slug(&slug)
         .ok_or_else(|| ApiError::NotFound(format!("Collection {slug} not found")))?;
     let src =
         nft_markets::item_image_source(p, &id).map_err(|e| ApiError::NotFound(e.to_string()))?;
-    if let Some((ctype, body)) = nft_markets::stored_image(&s.db.pool, &p.slug, &id).await {
-        return Ok(super::inscriptions::sandboxed_image(&ctype, body));
+    let before = q.before.as_deref() == Some("1");
+    // Stored pictures are current (an Apparition's own art); the venue's plain address still
+    // serves the first one, relayed without storing.
+    if !before {
+        if let Some((ctype, body)) = nft_markets::stored_image(&s.db.pool, &p.slug, &id).await {
+            return Ok(super::inscriptions::sandboxed_image(&ctype, body));
+        }
     }
     match ipfs::image(&src, None).await {
         Ok((ctype, body)) => {
-            nft_markets::store_image(&s.db.pool, &p.slug, &id, &ctype, &body).await;
+            if !before {
+                nft_markets::store_image(&s.db.pool, &p.slug, &id, &ctype, &body).await;
+            }
             Ok(super::inscriptions::sandboxed_image(&ctype, body))
         }
         Err(e) => {
