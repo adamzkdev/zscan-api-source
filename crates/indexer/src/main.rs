@@ -34,6 +34,8 @@ struct Config {
     start_height: String,
     backfill_chunk: u32,
     backfill_concurrency: usize,
+    /// Transactions whose outputs the resolver keeps in memory (2022 spam spends hold thousands).
+    resolver_cache: usize,
     /// Keep transactions for this many days only (blocks are always kept). Unset keeps all.
     tx_retention_days: Option<u32>,
     /// Scan for inscriptions (`INSCRIPTIONS=off` disables it).
@@ -63,6 +65,7 @@ impl Config {
             start_height: env_or("START_HEIGHT", &nu6_3_height().to_string()),
             backfill_chunk: env_or("BACKFILL_CHUNK", "200").parse()?,
             backfill_concurrency: env_or("BACKFILL_CONCURRENCY", "4").parse()?,
+            resolver_cache: env_or("RESOLVER_CACHE", "200000").parse()?,
             tx_retention_days: match std::env::var("TX_RETENTION_DAYS") {
                 Ok(v) if !v.trim().is_empty() => Some(v.trim().parse()?),
                 _ => None,
@@ -102,7 +105,7 @@ async fn main() -> Result<()> {
 
     let ctx: &'static Ctx = Box::leak(Box::new(Ctx {
         rpc: Rpc::new(&cfg.rpc_url, cfg.rpc_per_minute),
-        resolver: Resolver::new(lwd.clone(), 200_000),
+        resolver: Resolver::new(lwd.clone(), cfg.resolver_cache),
         db,
         lwd,
     }));
@@ -410,13 +413,13 @@ async fn miner_pools(ctx: &Ctx) -> Result<()> {
 }
 
 /// Keeps the `daily_blocks` and `daily_stats` rollups current: the last two days often, everything
-/// periodically (backfill and the economics fill touch older days). Pruning runs every 10 min
+/// every two hours (backfill and the economics fill touch older days). Pruning runs every 10 min
 /// on days older than the retention window, long after they were rolled up.
 async fn daily(ctx: &Ctx) -> Result<()> {
     let mut tick = 0u32;
     loop {
         let since =
-            (!tick.is_multiple_of(20)).then(|| chrono::Utc::now() - chrono::Duration::days(2));
+            (!tick.is_multiple_of(240)).then(|| chrono::Utc::now() - chrono::Duration::days(2));
         ctx.db.refresh_daily(since).await?;
         ctx.db.refresh_daily_stats(since).await?;
         tick = tick.wrapping_add(1);
@@ -898,13 +901,20 @@ async fn retag(ctx: &Ctx) -> Result<()> {
         zscan_db::sqlx::query_scalar("SELECT DISTINCT miner_tag FROM blocks WHERE miner_tag <> ''")
             .fetch_all(&ctx.db.pool)
             .await?;
-    for tag in tags {
-        zscan_db::sqlx::query("UPDATE blocks SET miner_pool = $2 WHERE miner_tag = $1 AND miner_pool IS DISTINCT FROM $2")
-            .bind(&tag)
-            .bind(zscan_chain::miner::pool_name(&tag))
-            .execute(&ctx.db.pool)
-            .await?;
-    }
+    // One pass over blocks for all tags (there are ~20k distinct ones; a query per tag took hours).
+    let pools: Vec<Option<&str>> = tags
+        .iter()
+        .map(|t| zscan_chain::miner::pool_name(t))
+        .collect();
+    zscan_db::sqlx::query(
+        "UPDATE blocks b SET miner_pool = m.pool
+         FROM UNNEST($1::text[], $2::text[]) AS m(tag, pool)
+         WHERE b.miner_tag = m.tag AND b.miner_pool IS DISTINCT FROM m.pool",
+    )
+    .bind(&tags)
+    .bind(&pools)
+    .execute(&ctx.db.pool)
+    .await?;
     loop {
         let batch = ctx.db.untagged_blocks(100).await?;
         if batch.is_empty() {

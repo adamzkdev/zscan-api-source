@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use zscan_chain::consts::nu6_3_height;
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -90,7 +90,7 @@ pub async fn mempool(State(s): State<AppState>) -> ApiResult<Mempool> {
     }))
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Network {
     pub height: Option<i32>,
     pub difficulty: Option<f64>,
@@ -110,6 +110,34 @@ pub struct Network {
 /// Network statistics.
 #[utoipa::path(get, path = "/v1/network", responses((status = 200, body = Network)), tag = "network")]
 pub async fn network(State(s): State<AppState>) -> ApiResult<Network> {
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+    use tokio::sync::Mutex;
+    // Every page polls this and the 24 h count reads a day of transactions: answer from the last
+    // result and refresh it in the background once it's 20 s old.
+    static CACHE: OnceLock<Mutex<Option<(Instant, Network)>>> = OnceLock::new();
+    static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let cache = CACHE.get_or_init(Default::default);
+    let cached = cache.lock().await.clone();
+    if let Some((t, v)) = cached {
+        if t.elapsed() >= Duration::from_secs(20)
+            && !REFRESHING.swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            tokio::spawn(async move {
+                if let Ok(v) = compute_network(&s).await {
+                    *cache.lock().await = Some((Instant::now(), v));
+                }
+                REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+            });
+        }
+        return Ok(Json(v));
+    }
+    let v = compute_network(&s).await?;
+    *cache.lock().await = Some((Instant::now(), v.clone()));
+    Ok(Json(v))
+}
+
+async fn compute_network(s: &AppState) -> Result<Network, ApiError> {
     let snap: Option<(i32, f64)> = sqlx::query_as(
         "SELECT height, difficulty FROM network_snapshots ORDER BY time DESC LIMIT 1",
     )
@@ -121,17 +149,24 @@ pub async fn network(State(s): State<AppState>) -> ApiResult<Network> {
     )
     .fetch_one(&s.db.pool)
     .await?;
+    // A bound parameter (not a subquery) lets the planner use transactions_time_idx.
+    let since: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT time FROM blocks ORDER BY height DESC LIMIT 1), now()) - interval '24 hours'",
+    )
+    .fetch_one(&s.db.pool)
+    .await?;
     let (txs, fees, shielded, migrations): (i64, Option<i64>, i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE kind <> 'coinbase'),
                 sum(fee)::bigint,
                 count(*) FILTER (WHERE kind IN ('shielded', 'shielding', 'deshielding', 'migration', 'mixed')),
                 count(*) FILTER (WHERE kind = 'migration')
-         FROM transactions WHERE time > (SELECT max(time) FROM blocks) - interval '24 hours'",
+         FROM transactions WHERE time > $1",
     )
+    .bind(since)
     .fetch_one(&s.db.pool)
     .await?;
     let height = super::tip(&s.db).await?;
-    Ok(Json(Network {
+    Ok(Network {
         height,
         difficulty: snap.map(|s| s.1),
         // Equihash (200, 9): difficulty 1 corresponds to 2^13 expected solutions per block.
@@ -149,7 +184,7 @@ pub async fn network(State(s): State<AppState>) -> ApiResult<Network> {
             0.0
         },
         migrations_24h: migrations,
-    }))
+    })
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

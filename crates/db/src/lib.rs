@@ -413,7 +413,8 @@ impl Db {
                 diff_orchard, diff_ironwood, diff_lockbox, diff_supply, ok)
              SELECT height, ph, dt, dsp, dsa, dor, diw, dlb, dsu,
                     dt = 0 AND dsp = 0 AND dsa = 0 AND dor = 0 AND diw = 0 AND dlb = 0 AND dsu = 0
-             FROM d WHERE n = height - ph AND econ",
+             FROM d WHERE n = height - ph AND econ
+             ON CONFLICT (height) DO NOTHING",
         )
         .execute(&self.pool)
         .await?;
@@ -438,10 +439,11 @@ impl Db {
                     max(sapling_tree_size), max(orchard_tree_size), max(ironwood_tree_size),
                     sum(d_transparent), sum(d_sprout), sum(d_sapling), sum(d_orchard), sum(d_ironwood)
              FROM blocks
-             WHERE $1::timestamptz IS NULL OR time >= date_trunc('day', $1)
+             WHERE time >= date_trunc('day', $1)
              GROUP BY 1",
         )
-        .bind(since)
+        // The epoch (before genesis) rather than `$1 IS NULL OR …`, which keeps the planner off the time index.
+        .bind(since.unwrap_or(DateTime::<Utc>::UNIX_EPOCH))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -467,12 +469,21 @@ impl Db {
     /// touched: the day holding the lowest stored transaction height may be partial (backfill
     /// start or pruning), and older rows are kept as computed before their data was pruned.
     pub async fn refresh_daily_stats(&self, since: Option<DateTime<Utc>>) -> Result<u64> {
+        // The first complete day is bound as a value (not a subquery) so both scans below use
+        // their time index instead of reading the whole table.
+        let first: Option<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT GREATEST(date_trunc('day', time) + interval '1 day',
+                             COALESCE(date_trunc('day', $1), '-infinity'))
+             FROM blocks WHERE height = (SELECT COALESCE(tx_low, low) FROM sync_state)",
+        )
+        .bind(since)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(first) = first else {
+            return Ok(0);
+        };
         let r = sqlx::query(
-            "WITH first AS (
-                SELECT GREATEST(date_trunc('day', time) + interval '1 day',
-                                COALESCE(date_trunc('day', $1), '-infinity')) AS day
-                FROM blocks WHERE height = (SELECT COALESCE(tx_low, low) FROM sync_state)
-             ), t AS (
+            "WITH t AS (
                 SELECT date_trunc('day', time) AS day,
                        count(*) FILTER (WHERE kind <> 'coinbase') txs,
                        count(*) FILTER (WHERE kind = 'transparent') transparent,
@@ -489,12 +500,12 @@ impl Db {
                            WHERE kind <> 'coinbase' AND sprout_vb + sapling_vb + orchard_vb + ironwood_vb < 0), 0) s_in,
                        COALESCE(sum(sprout_vb + sapling_vb + orchard_vb + ironwood_vb) FILTER (
                            WHERE kind <> 'coinbase' AND sprout_vb + sapling_vb + orchard_vb + ironwood_vb > 0), 0) s_out
-                FROM transactions WHERE time >= (SELECT day FROM first) GROUP BY 1
+                FROM transactions WHERE time >= $1 GROUP BY 1
              ), b AS (
                 SELECT date_trunc('day', time) AS day, count(*) blocks, sum(size) bytes, max(height) h,
                        sum(d_transparent) dt, sum(d_sprout) dsp, sum(d_sapling) dsa,
                        sum(d_orchard) dor, sum(d_ironwood) diw
-                FROM blocks WHERE time >= (SELECT day FROM first) GROUP BY 1
+                FROM blocks WHERE time >= $1 GROUP BY 1
              )
              INSERT INTO daily_stats (day, txs, transparent, shielding, deshielding, shielded,
                 migration, mixed, fees, tx_bytes, transparent_inputs, transparent_outputs,
@@ -520,7 +531,7 @@ impl Db {
                 d_sprout = EXCLUDED.d_sprout, d_sapling = EXCLUDED.d_sapling,
                 d_orchard = EXCLUDED.d_orchard, d_ironwood = EXCLUDED.d_ironwood",
         )
-        .bind(since)
+        .bind(first)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
