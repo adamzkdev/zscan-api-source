@@ -13,10 +13,12 @@ mod presence;
 mod routes;
 mod street;
 mod street_agents;
+mod street_card;
 mod street_chat;
 mod street_llm;
 mod street_pay;
 mod street_plots;
+mod street_sprout;
 mod street_pulse;
 mod street_wallets;
 mod street_works;
@@ -298,10 +300,12 @@ async fn main() -> Result<()> {
         .route("/street/gossip", get(street::gossip))
         .route("/street/agents", get(street_agents::agents))
         .route("/street/people", get(street_agents::people))
+        .route("/street/card/tx/{file}", get(street_card::tx))
         .route("/street/paper", get(street::paper))
         .route("/street/mayor", get(street::mayor))
         .route("/street/events", get(street::events))
         .route("/street/works", get(street_works::works))
+        .route("/street/sprout", get(street_sprout::sprout))
         .route("/street/works/vote", post(street_works::vote))
         .route("/street/memory", get(street::memory).post(street::remember))
         .route("/street/pay", get(street_pay::info))
@@ -594,7 +598,10 @@ pub(crate) fn client_ip(peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
 /// Pictures and inscribed files: immutable, cached by browsers, and requested dozens at a time
 /// by gallery pages.
 fn is_media(path: &str) -> bool {
-    path.ends_with("/image") || path.ends_with("/content") || path.ends_with("/logo")
+    path.ends_with("/image")
+        || path.ends_with("/content")
+        || path.ends_with("/logo")
+        || path.ends_with(".png")
 }
 
 /// Per-IP rate limiting (see [`client_ip`]).
