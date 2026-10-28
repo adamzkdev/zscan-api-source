@@ -2,5 +2,11 @@
 node_modules
 .next
 .env
+.env.*
+!.env.example
+# Operator-specific deployment files and secrets stay outside this source distribution.
+/deploy/
+.secrets/
+*.bundle
 *.log
 docker/bin/

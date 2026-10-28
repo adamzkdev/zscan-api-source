@@ -4,6 +4,9 @@ Zcash indexer and public data API — **[api.zscan.cash](https://api.zscan.cash)
 [zscan.cash](https://zscan.cash) (explorer, repo `zscan`), [ai.zscan.cash](https://ai.zscan.cash) (`zscan-ai`) and
 the other ZScan products; each subdomain has its own repo.
 
+This source distribution includes the application history and generic Docker setup. Operator-specific
+deployment files and production configuration are excluded. The software is unchanged by that separation.
+
 - **Indexer**: blocks, transactions (v1–v6, including Ironwood), transparent addresses, mempool, reorg-safe.
 - **Ironwood tracker**: Orchard → Ironwood migration (NU6.3), pool balances over time, daily flows, supply-integrity checks.
 - **Public API**: REST + WebSocket, OpenAPI spec at `/openapi.json`, interactive docs at `/docs`.
